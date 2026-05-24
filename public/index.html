@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Image Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+/* ── Design Tokens ────────────────────────── */
+:root {
+  --bg:        #09090a;
+  --surface:   #111113;
+  --surface-2: #17171a;
+  --border:    rgba(255,255,255,.07);
+  --border-hi: rgba(255,255,255,.13);
+  --gold:      #c9a84c;
+  --gold-dim:  #7a6030;
+  --gold-glow: rgba(201,168,76,.15);
+  --text:      #e6e1da;
+  --muted:     #65615c;
+  --muted-2:   #3a3834;
+  --error:     #b85a48;
+  --radius:    12px;
+  --r-sm:      8px;
+  --ease-out:  cubic-bezier(.22,.68,0,1.2);
+  --ease-in:   cubic-bezier(.4,0,1,1);
+}
+
+/* ── Reset ───────────────────────────────── */
+*,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+
+/* ── Body / Background ───────────────────── */
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 64px 20px 100px;
+  background-image:
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(201,168,76,.09) 0%, transparent 65%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E");
+}
+
+/* ── Header ──────────────────────────────── */
+header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+.eyebrow {
+  display: inline-block;
+  font-size: .67rem;
+  letter-spacing: .25em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+h1 {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(2.6rem, 7vw, 4.2rem);
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.05;
+  letter-spacing: -.02em;
+}
+h1 em {
+  font-style: italic;
+  color: var(--gold);
+}
+.header-rule {
+  width: 40px;
+  height: 1px;
+  background: var(--gold-dim);
+  margin: 18px auto 0;
+}
+
+/* ── Creation Card ───────────────────────── */
+.card {
+  width: 100%;
+  max-width: 580px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--gold);
+  border-radius: var(--radius);
+  padding: 32px 36px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,.03) inset,
+    0 32px 80px rgba(0,0,0,.65),
+    0 0 60px var(--gold-glow);
+}
+
+/* Field label */
+.field-label {
+  display: block;
+  font-size: .67rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 9px;
+  font-weight: 500;
+}
+
+/* Textarea */
+textarea {
+  width: 100%;
+  min-height: 108px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 14px 16px;
+  font-family: 'Inter', sans-serif;
+  font-size: .925rem;
+  color: var(--text);
+  line-height: 1.65;
+  resize: vertical;
+  outline: none;
+  transition: border-color .2s;
+}
+textarea::placeholder { color: var(--muted-2); }
+textarea:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(201,168,76,.07); }
+
+/* Controls row */
+.controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  align-items: stretch;
+}
+.size-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.size-wrap::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted);
+  pointer-events: none;
+}
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 44px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0 34px 0 14px;
+  font-family: 'Inter', sans-serif;
+  font-size: .82rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .2s;
+}
+select:focus { border-color: var(--gold-dim); }
+select optgroup { background: #1c1c1f; }
+select option  { background: #1c1c1f; }
+
+/* Generate button */
+#btn {
+  height: 44px;
+  flex: 1.4;
+  padding: 0 22px;
+  background: var(--gold);
+  color: #0d0b07;
+  font-family: 'Inter', sans-serif;
+  font-size: .85rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .18s, transform .12s var(--ease-out), box-shadow .18s;
+}
+#btn:hover  { background: #d9b75c; box-shadow: 0 4px 20px rgba(201,168,76,.3); }
+#btn:active { transform: scale(.97); }
+#btn:disabled {
+  background: var(--gold-dim);
+  color: rgba(10,8,4,.45);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Result area */
+.result { margin-top: 20px; }
+
+.result-img {
+  width: 100%;
+  border-radius: var(--r-sm);
+  display: block;
+  animation: revealUp .45s var(--ease-out) both;
+}
+@keyframes revealUp {
+  from { opacity: 0; transform: translateY(14px) scale(.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+.result-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: .72rem;
+  color: var(--muted);
+  letter-spacing: .04em;
+}
+
+/* Prompt tag — result */
+.prompt-tag {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 11px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--gold-dim);
+  border-radius: var(--r-sm);
+  font-size: .8rem;
+  color: var(--muted);
+  word-break: break-all;
+  cursor: pointer;
+  transition: border-left-color .2s, color .2s;
+}
+.prompt-tag:hover { border-left-color: var(--gold); color: var(--text); }
+.prompt-tag-text { flex: 1; line-height: 1.55; }
+.copy-hint {
+  flex-shrink: 0;
+  font-size: .68rem;
+  color: var(--muted-2);
+  padding-top: 1px;
+  transition: color .15s;
+}
+.prompt-tag:hover .copy-hint { color: var(--muted); }
+
+/* Generating state */
+.generating {
+  padding: 22px 0;
+  text-align: center;
+  font-size: .8rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dots span {
+  opacity: 0;
+  animation: blink 1.4s infinite;
+}
+.dots span:nth-child(2) { animation-delay: .22s; }
+.dots span:nth-child(3) { animation-delay: .44s; }
+@keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:.9} }
+
+.error-msg {
+  color: var(--error);
+  font-size: .85rem;
+  padding: 12px 0;
+  line-height: 1.5;
+}
+
+/* ── Gallery Section ─────────────────────── */
+.gallery-section {
+  width: 100%;
+  max-width: 1040px;
+  margin-top: 80px;
+}
+.gallery-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.gallery-eyebrow {
+  font-size: .67rem;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+h2 {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.75rem;
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1;
+}
+.gallery-count {
+  margin-left: auto;
+  font-size: .72rem;
+  color: var(--muted);
+  letter-spacing: .04em;
+}
+
+/* Gallery grid */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 16px;
+}
+.gallery-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform .24s var(--ease-out), box-shadow .24s, border-color .24s;
+  animation: fadeIn .4s var(--ease-out) both;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+.gallery-item:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 50px rgba(0,0,0,.55), 0 0 0 1px var(--border-hi) inset;
+  border-color: rgba(201,168,76,.2);
+}
+.gallery-item img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  transition: transform .4s var(--ease-out);
+}
+.gallery-item:hover img { transform: scale(1.025); }
+
+.gallery-info {
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.g-prompt {
+  font-size: .78rem;
+  color: #7a7570;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  padding-left: 11px;
+  transition: color .2s;
+}
+.g-prompt::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 2px; bottom: 2px;
+  width: 2px;
+  background: var(--gold-dim);
+  border-radius: 2px;
+  transition: background .2s;
+}
+.gallery-item:hover .g-prompt { color: var(--text); }
+.gallery-item:hover .g-prompt::before { background: var(--gold); }
+
+.g-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .67rem;
+  color: var(--muted);
+  margin-top: 8px;
+  letter-spacing: .03em;
+}
+.g-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--muted-2); flex-shrink: 0; }
+.g-copy {
+  margin-left: auto;
+  font-size: .67rem;
+  color: var(--muted-2);
+  opacity: 0;
+  transition: opacity .2s;
+}
+.gallery-item:hover .g-copy { opacity: 1; }
+
+/* ── Responsive ──────────────────────────── */
+@media (max-width: 520px) {
+  .card { padding: 24px 20px; }
+  .controls { flex-direction: column; }
+  #btn { flex: none; width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="eyebrow">AI Creation Studio</span>
+  <h1>Image <em>Studio</em></h1>
+  <div class="header-rule"></div>
+</header>
+
+<div class="card">
+  <label class="field-label" for="prompt">Describe your vision</label>
+  <textarea id="prompt" placeholder="一只穿宇航服的柴犬在月球漫步，电影级光影，超写实风格…"></textarea>
+  <div class="controls">
+    <div class="size-wrap">
+      <select id="size">
+        <optgroup label="标准">
+          <option value="1024x1024">1024 × 1024（方图）</option>
+          <option value="1024x1536">1024 × 1536（竖版）</option>
+          <option value="1536x1024">1536 × 1024（横版）</option>
+          <option value="auto">Auto（自动）</option>
+        </optgroup>
+        <optgroup label="高清">
+          <option value="1920x1080">1K · 1920 × 1080</option>
+          <option value="2560x1440">2K · 2560 × 1440</option>
+          <option value="3840x2160">4K · 3840 × 2160</option>
+        </optgroup>
+      </select>
+    </div>
+    <button id="btn" onclick="generate()">Generate</button>
+  </div>
+  <div class="result" id="result"></div>
+</div>
+
+<section class="gallery-section" id="gallerySection" style="display:none">
+  <div class="gallery-header">
+    <span class="gallery-eyebrow">History</span>
+    <h2>作品集</h2>
+    <span class="gallery-count" id="galleryCount"></span>
+  </div>
+  <div class="gallery" id="gallery"></div>
+</section>
+
+<script>
+/* ── 复制 prompt（事件委托）──────────────── */
+document.addEventListener('click', function (e) {
+  const el = e.target.closest('[data-prompt]');
+  if (!el) return;
+  const text = el.dataset.prompt;
+  navigator.clipboard.writeText(text).then(() => {
+    const hint = el.querySelector('.copy-hint, .g-copy');
+    if (hint) {
+      const prev = hint.textContent;
+      hint.textContent = '✓ Copied';
+      setTimeout(() => { hint.textContent = prev; }, 1600);
+    }
+    const ta = document.getElementById('prompt');
+    if (ta && !ta.value.trim()) ta.value = text;
+  });
+});
+
+function copyPrompt() {}
+
+/* ── 生成图片 ─────────────────────────────── */
+async function generate() {
+  const promptEl = document.getElementById('prompt');
+  const prompt = promptEl.value.trim();
+  if (!prompt) { promptEl.focus(); return; }
+  const btn = document.getElementById('btn');
+  const result = document.getElementById('result');
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  result.innerHTML = `<div class="generating">Creating<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, size: document.getElementById('size').value })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '请求失败');
+
+    let html = '';
+    data.images.forEach(img => {
+      const src = img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '');
+      if (!src) return;
+      html += `
+        <img class="result-img" src="${src}" alt="generated" />
+        <div class="result-meta">
+          <span>${escHtml(data.model)}</span>
+          <span>${(data.took_ms / 1000).toFixed(1)}s</span>
+        </div>
+        <div class="prompt-tag" data-prompt="${escAttr(data.prompt)}">
+          <span class="prompt-tag-text">${escHtml(data.prompt)}</span>
+          <span class="copy-hint">点击复制</span>
+        </div>`;
+    });
+    result.innerHTML = html;
+    loadGallery();
+  } catch (e) {
+    result.innerHTML = `<p class="error-msg">${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+  }
+}
+
+/* ── 加载历史画廊 ─────────────────────────── */
+async function loadGallery() {
+  try {
+    const res = await fetch('/api/gallery');
+    const list = await res.json();
+    const section = document.getElementById('gallerySection');
+    const container = document.getElementById('gallery');
+    const count = document.getElementById('galleryCount');
+    if (!list.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    count.textContent = list.length + ' 张';
+    container.innerHTML = list.map((item, i) => {
+      const src = item.local_url || item.remote_url || '';
+      if (!src) return '';
+      const time = new Date(item.created_at).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+      return `<div class="gallery-item" style="animation-delay:${Math.min(i, 9) * 35}ms"
+               data-prompt="${escAttr(item.prompt)}">
+        <img src="${src}" alt="generated" loading="lazy" />
+        <div class="gallery-info">
+          <div class="g-prompt">${escHtml(item.prompt)}</div>
+          <div class="g-meta">
+            <span>${escHtml(item.size)}</span>
+            <span class="g-dot"></span>
+            <span>${escHtml(item.model)}</span>
+            <span class="g-dot"></span>
+            <span>${time}</span>
+            <span class="g-copy">点击复制 prompt</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error('load gallery failed', e);
+  }
+}
+
+/* ── 工具函数 ─────────────────────────────── */
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function escAttr(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/\n/g,' ');
+}
+
+/* ── 页面加载时获取画廊 ──────────────────── */
+loadGallery();
+</script>
+</body>
+</html>
