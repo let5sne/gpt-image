@@ -8,6 +8,16 @@
 - **前端**：单文件原生 HTML/CSS/JS，零构建
 - **配置**：`.env` 管理 API Key
 
+## 当前已落地的生产保护
+
+- 接口鉴权：`AUTH_REQUIRED=true` 时，`/api/generate` 需要 `x-app-token` 或 `Authorization: Bearer <token>`。
+- 速率限制：默认每分钟每客户端最多 12 次生图请求。
+- 日额度限制：默认每客户端每天最多 40 次请求。
+- 输入与成本保护：限制 prompt 长度、图片尺寸白名单、像素上限、单次图片数量上限。
+- 统一错误响应：API 返回统一结构，便于前端和日志排查。
+- 请求观测：每个请求带 `x-request-id`，服务端日志记录关键状态。
+- CI 基线：已新增 GitHub Actions，在 push/PR 时运行 `npm test`。
+
 ## 目录
 
 ```
@@ -34,6 +44,9 @@ npm install
 npm start
 # 或开发模式（保存自动重启，需 Node ≥ 18.11）
 npm run dev
+
+# 4. 运行测试
+npm test
 ```
 
 打开 http://localhost:3000 即可使用。
@@ -67,6 +80,8 @@ vercel
 - `IMAGE_API_BASE`
 - `IMAGE_API_KEY`
 - `IMAGE_API_MODEL`（可选）
+- `AUTH_REQUIRED`（生产建议 `true`）
+- `APP_ACCESS_TOKEN`（当 `AUTH_REQUIRED=true` 时必填）
 
 配置后重新部署：
 
@@ -83,6 +98,30 @@ vercel --prod
 
 ## API
 
+统一响应格式：
+
+```json
+{
+  "success": true,
+  "data": {},
+  "request_id": "uuid"
+}
+```
+
+错误响应格式：
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "invalid_prompt",
+    "message": "prompt is required",
+    "details": null
+  },
+  "request_id": "uuid"
+}
+```
+
 ### POST `/api/generate`
 
 请求体：
@@ -90,12 +129,22 @@ vercel --prod
 { "prompt": "...", "size": "1024x1024", "n": 1 }
 ```
 
+请求头（开启鉴权时必填其一）：
+
+- `x-app-token: <APP_ACCESS_TOKEN>`
+- `Authorization: Bearer <APP_ACCESS_TOKEN>`
+
 响应：
 ```json
 {
-  "images": [{ "url": "https://...", "b64_json": null }],
-  "took_ms": 12345,
-  "model": "gpt-image-2"
+  "success": true,
+  "data": {
+    "images": [{ "url": "https://...", "b64_json": null }],
+    "took_ms": 12345,
+    "model": "gpt-image-2",
+    "prompt": "..."
+  },
+  "request_id": "uuid"
 }
 ```
 

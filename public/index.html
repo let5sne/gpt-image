@@ -131,6 +131,29 @@ textarea:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(201,1
   margin-top: 12px;
   align-items: stretch;
 }
+.helper-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.helper-row input {
+  width: 100%;
+  height: 38px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: .8rem;
+  padding: 0 12px;
+  outline: none;
+}
+.helper-row input:focus { border-color: var(--gold-dim); }
+.helper-note {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .72rem;
+}
 .size-wrap {
   position: relative;
   flex: 1;
@@ -423,6 +446,10 @@ h2 {
     </div>
     <button id="btn" onclick="generate()">Generate</button>
   </div>
+  <div class="helper-row">
+    <input id="accessToken" type="password" placeholder="Access Token（若后端开启鉴权请填写）" />
+  </div>
+  <p class="helper-note">已自动限制 prompt 长度与请求频率，失败时会自动重试 1 次。</p>
   <div class="result" id="result"></div>
 </div>
 
@@ -455,25 +482,89 @@ document.addEventListener('click', function (e) {
 
 function copyPrompt() {}
 
+function normalizeApiResponse(payload) {
+  if (payload && typeof payload === 'object' && 'success' in payload) {
+    return payload;
+  }
+  return {
+    success: true,
+    data: payload,
+    request_id: null,
+  };
+}
+
+function getAccessToken() {
+  const el = document.getElementById('accessToken');
+  return el ? el.value.trim() : '';
+}
+
+function persistAccessToken(token) {
+  if (!token) {
+    localStorage.removeItem('image_studio_access_token');
+    return;
+  }
+  localStorage.setItem('image_studio_access_token', token);
+}
+
+async function requestWithRetry(url, options, retries = 1) {
+  let attempts = 0;
+  let lastError = null;
+  while (attempts <= retries) {
+    attempts += 1;
+    try {
+      const res = await fetch(url, options);
+      const json = normalizeApiResponse(await res.json());
+      if (res.ok && json.success) {
+        return json;
+      }
+
+      const shouldRetry = [429, 502, 503].includes(res.status) && attempts <= retries;
+      if (!shouldRetry) {
+        const msg = json.error && json.error.message ? json.error.message : '请求失败';
+        const err = new Error(msg);
+        err.requestId = json.request_id || null;
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 500 * attempts));
+    } catch (err) {
+      lastError = err;
+      if (attempts > retries) throw lastError;
+      await new Promise((r) => setTimeout(r, 500 * attempts));
+    }
+  }
+  throw lastError || new Error('请求失败');
+}
+
 /* ── 生成图片 ─────────────────────────────── */
 async function generate() {
   const promptEl = document.getElementById('prompt');
   const prompt = promptEl.value.trim();
   if (!prompt) { promptEl.focus(); return; }
+  if (prompt.length > 800) {
+    document.getElementById('result').innerHTML = '<p class="error-msg">prompt 超过 800 字符，请精简后重试。</p>';
+    return;
+  }
+
   const btn = document.getElementById('btn');
   const result = document.getElementById('result');
+  const token = getAccessToken();
+  persistAccessToken(token);
+
   btn.disabled = true;
   btn.textContent = 'Generating…';
   result.innerHTML = `<div class="generating">Creating<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>`;
 
   try {
-    const res = await fetch('/api/generate', {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['x-app-token'] = token;
+
+    const api = await requestWithRetry('/api/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ prompt, size: document.getElementById('size').value })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '请求失败');
+
+    const data = api.data || {};
 
     let html = '';
     data.images.forEach(img => {
@@ -493,7 +584,8 @@ async function generate() {
     result.innerHTML = html;
     loadGallery();
   } catch (e) {
-    result.innerHTML = `<p class="error-msg">${escHtml(e.message)}</p>`;
+    const rid = e.requestId ? `（request_id: ${escHtml(e.requestId)}）` : '';
+    result.innerHTML = `<p class="error-msg">${escHtml(e.message)}${rid}</p>`;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Generate';
@@ -504,7 +596,9 @@ async function generate() {
 async function loadGallery() {
   try {
     const res = await fetch('/api/gallery');
-    const list = await res.json();
+    const raw = await res.json();
+    const normalized = normalizeApiResponse(raw);
+    const list = normalized.data || [];
     const section = document.getElementById('gallerySection');
     const container = document.getElementById('gallery');
     const count = document.getElementById('galleryCount');
@@ -549,6 +643,12 @@ function escAttr(s) {
 }
 
 /* ── 页面加载时获取画廊 ──────────────────── */
+const cachedToken = localStorage.getItem('image_studio_access_token');
+if (cachedToken) {
+  const tokenInput = document.getElementById('accessToken');
+  if (tokenInput) tokenInput.value = cachedToken;
+}
+
 loadGallery();
 </script>
 </body>
