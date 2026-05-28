@@ -820,6 +820,68 @@ test('POST /api/admin/credits/grant-by-email grants credits and creates wallet i
   assert.equal(missing.status, 404);
 });
 
+test('POST /api/admin/credits/grant-by-email validates email and credits bounds', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const invalidEmail = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops-at-example.com', credits: 20 });
+  assert.equal(invalidEmail.status, 400);
+  assert.equal(invalidEmail.body.error.code, 'invalid_email');
+
+  const invalidCreditsLow = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops@example.com', credits: 0 });
+  assert.equal(invalidCreditsLow.status, 400);
+  assert.equal(invalidCreditsLow.body.error.code, 'invalid_credits');
+
+  const invalidCreditsHigh = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops@example.com', credits: 10001 });
+  assert.equal(invalidCreditsHigh.status, 400);
+  assert.equal(invalidCreditsHigh.body.error.code, 'invalid_credits');
+});
+
+test('POST /api/admin/credits/grant-by-email returns disabled errors for missing feature flags', async () => {
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const appEmailDisabled = loadFreshApp();
+  const emailDisabled = await request(appEmailDisabled)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops@example.com', credits: 20 });
+  assert.equal(emailDisabled.status, 404);
+  assert.equal(emailDisabled.body.error.code, 'email_auth_disabled');
+
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const appCreditsDisabled = loadFreshApp();
+  const creditsDisabled = await request(appCreditsDisabled)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops@example.com', credits: 20 });
+  assert.equal(creditsDisabled.status, 404);
+  assert.equal(creditsDisabled.body.error.code, 'credits_disabled');
+});
+
 test('admin redemption APIs create batches, list redacted codes, and revoke active codes', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';
