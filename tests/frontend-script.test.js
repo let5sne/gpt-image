@@ -148,6 +148,35 @@ test('admin page loadAuditLogs sends selected action filter', async () => {
   assert.equal(context.auditRefreshBtn.disabled, false);
 });
 
+test('admin page renderSetupHint shows steps and clears content', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const escapeHtmlMatch = html.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(escapeHtmlMatch, 'expected escapeHtml function in admin.html');
+
+  const renderSetupHintSource = extractFunctionSource(html, 'renderSetupHint');
+  const setupHint = { className: '', innerHTML: '' };
+  const context = vm.createContext({ setupHint });
+
+  vm.runInContext(`
+    ${escapeHtmlMatch[0]}
+    ${renderSetupHintSource}
+    globalThis.renderSetupHint = renderSetupHint;
+  `, context);
+
+  context.renderSetupHint({
+    title: '后台未配置 ADMIN_TOKEN',
+    steps: ['设置 ADMIN_TOKEN', '重启 npm run dev'],
+  });
+
+  assert.equal(setupHint.className, 'setup-hint is-visible');
+  assert.ok(setupHint.innerHTML.includes('后台未配置 ADMIN_TOKEN'));
+  assert.ok(setupHint.innerHTML.includes('设置 ADMIN_TOKEN'));
+
+  context.renderSetupHint();
+  assert.equal(setupHint.className, 'setup-hint');
+  assert.equal(setupHint.innerHTML, '');
+});
+
 test('index page parseCooldownSeconds parses retry seconds safely', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
   const fnSource = extractFunctionSource(html, 'parseCooldownSeconds');

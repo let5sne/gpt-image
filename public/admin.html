@@ -145,6 +145,36 @@ h1 {
   color: var(--muted);
 }
 
+.setup-hint {
+  display: none;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(183, 93, 56, .28);
+  border-radius: 8px;
+  background: rgba(183, 93, 56, .08);
+}
+
+.setup-hint.is-visible {
+  display: block;
+}
+
+.setup-hint strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent-2);
+}
+
+.setup-hint p,
+.setup-hint ol {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.setup-hint ol {
+  padding-left: 18px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -367,6 +397,7 @@ h1 {
   </header>
 
   <p id="statusLine" class="status-line">等待连接。</p>
+  <div id="setupHint" class="setup-hint" aria-live="polite"></div>
   <div id="recentOp" class="recent-op" aria-live="polite"></div>
 
   <section class="grid" aria-label="关键指标">
@@ -478,6 +509,7 @@ const tokenInput = document.getElementById('adminToken');
 const rememberBtn = document.getElementById('rememberBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const statusLine = document.getElementById('statusLine');
+const setupHint = document.getElementById('setupHint');
 const recentOp = document.getElementById('recentOp');
 const grantForm = document.getElementById('grantForm');
 const grantBtn = document.getElementById('grantBtn');
@@ -514,6 +546,22 @@ function setStatus(message, type = '') {
   statusLine.className = `status-line ${type}`.trim();
 }
 
+function renderSetupHint(config = null) {
+  if (!setupHint) return;
+  if (!config) {
+    setupHint.className = 'setup-hint';
+    setupHint.innerHTML = '';
+    return;
+  }
+
+  const steps = Array.isArray(config.steps) ? config.steps : [];
+  const body = steps.length > 0
+    ? `<ol>${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+    : `<p>${escapeHtml(config.message || '')}</p>`;
+  setupHint.className = 'setup-hint is-visible';
+  setupHint.innerHTML = `<strong>${escapeHtml(config.title || '需要配置')}</strong>${body}`;
+}
+
 function getAdminToken() {
   return tokenInput.value.trim();
 }
@@ -533,7 +581,10 @@ async function api(path, options = {}) {
   const body = await res.json().catch(() => null);
   if (!res.ok || !body || body.success === false) {
     const message = body && body.error ? body.error.message : `request failed ${res.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.code = body && body.error ? body.error.code : '';
+    error.status = res.status;
+    throw error;
   }
   return body.data;
 }
@@ -738,10 +789,19 @@ async function loadAuditLogs() {
 async function loadOverview() {
   if (!getAdminToken()) {
     setStatus('需要 ADMIN_TOKEN。', 'error');
+    renderSetupHint({
+      title: '先输入管理员 token',
+      steps: [
+        '在项目根目录的 .env 中设置 ADMIN_TOKEN=一个强随机值',
+        '重启 npm run dev',
+        '把同一个 ADMIN_TOKEN 填到本页输入框后再刷新',
+      ],
+    });
     return;
   }
   refreshBtn.disabled = true;
   setStatus('刷新中...');
+  renderSetupHint();
   try {
     const data = await api('/api/admin/overview');
     renderOverview(data);
@@ -749,6 +809,22 @@ async function loadOverview() {
     await loadEmailUsers();
     setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
   } catch (err) {
+    if (err.code === 'admin_not_configured') {
+      renderSetupHint({
+        title: '后台未配置 ADMIN_TOKEN',
+        steps: [
+          '在 .env 中设置 ADMIN_TOKEN=一个强随机值',
+          '重启 npm run dev 让服务重新加载环境变量',
+          '把相同的 token 输入到本页后点击刷新',
+        ],
+      });
+      metricEls.configBadge.textContent = '未配置';
+      metricEls.configBadge.className = 'badge bad';
+      auditMeta.textContent = '未配置';
+      auditMeta.className = 'badge bad';
+      emailUsersMeta.textContent = '未配置';
+      emailUsersMeta.className = 'badge bad';
+    }
     setStatus(err.message, 'error');
   } finally {
     refreshBtn.disabled = false;
