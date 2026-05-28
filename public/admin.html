@@ -291,10 +291,21 @@ h1 {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.stack {
+  display: grid;
+  gap: 16px;
+}
+
 .prompt {
   max-width: 440px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.audit-detail {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 920px) {
@@ -350,15 +361,27 @@ h1 {
   </section>
 
   <div class="main">
-    <section class="section">
-      <div class="section-head">
-        <h2>近期任务</h2>
-        <span id="configBadge" class="badge">未连接</span>
-      </div>
-      <div class="section-body" id="jobsTableWrap">
-        <div class="empty">暂无数据</div>
-      </div>
-    </section>
+    <div class="stack">
+      <section class="section">
+        <div class="section-head">
+          <h2>近期任务</h2>
+          <span id="configBadge" class="badge">未连接</span>
+        </div>
+        <div class="section-body" id="jobsTableWrap">
+          <div class="empty">暂无数据</div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>最近审计记录</h2>
+          <span id="auditMeta" class="badge">未加载</span>
+        </div>
+        <div class="section-body" id="auditTableWrap">
+          <div class="empty">暂无数据</div>
+        </div>
+      </section>
+    </div>
 
     <aside class="section">
       <div class="section-head">
@@ -435,6 +458,8 @@ const grantBtn = document.getElementById('grantBtn');
 const grantEmailForm = document.getElementById('grantEmailForm');
 const grantEmailBtn = document.getElementById('grantEmailBtn');
 const jobsTableWrap = document.getElementById('jobsTableWrap');
+const auditMeta = document.getElementById('auditMeta');
+const auditTableWrap = document.getElementById('auditTableWrap');
 const emailUsersMeta = document.getElementById('emailUsersMeta');
 const emailUsersQuery = document.getElementById('emailUsersQuery');
 const emailUsersSearchBtn = document.getElementById('emailUsersSearchBtn');
@@ -543,6 +568,38 @@ function renderJobs(jobs) {
   `;
 }
 
+function renderAuditLogs(entries, total) {
+  if (!entries || entries.length === 0) {
+    auditTableWrap.innerHTML = '<div class="empty">暂无审计记录</div>';
+    auditMeta.textContent = '最近 0 条';
+    auditMeta.className = 'badge';
+    return;
+  }
+
+  const rows = entries.map((entry) => {
+    const detailText = escapeHtml(JSON.stringify(entry.detail || {}, null, 2));
+    return `
+      <tr>
+        <td><span class="badge ${statusClass(entry.action)}">${escapeHtml(entry.action || '-')}</span></td>
+        <td class="mono">${escapeHtml(entry.request_id || '-')}</td>
+        <td>${escapeHtml(entry.ts ? new Date(entry.ts).toLocaleString('zh-CN') : '-')}</td>
+        <td><div class="prompt mono audit-detail">${detailText}</div></td>
+      </tr>
+    `;
+  }).join('');
+
+  auditTableWrap.innerHTML = `
+    <table class="table">
+      <thead>
+        <tr><th>动作</th><th>Request</th><th>时间</th><th>Detail</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  auditMeta.textContent = `最近 ${formatNumber(total)} 条`;
+  auditMeta.className = 'badge ok';
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
@@ -628,6 +685,24 @@ async function loadEmailUsers() {
   }
 }
 
+async function loadAuditLogs() {
+  if (!getAdminToken()) {
+    auditMeta.textContent = '需要 token';
+    auditMeta.className = 'badge bad';
+    auditTableWrap.innerHTML = '<div class="empty">请输入 ADMIN_TOKEN</div>';
+    return;
+  }
+
+  try {
+    const data = await api('/api/admin/audit-logs?limit=12');
+    renderAuditLogs(data.entries || [], data.total || 0);
+  } catch (err) {
+    auditMeta.textContent = '加载失败';
+    auditMeta.className = 'badge bad';
+    auditTableWrap.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
 async function loadOverview() {
   if (!getAdminToken()) {
     setStatus('需要 ADMIN_TOKEN。', 'error');
@@ -638,6 +713,7 @@ async function loadOverview() {
   try {
     const data = await api('/api/admin/overview');
     renderOverview(data);
+    await loadAuditLogs();
     await loadEmailUsers();
     setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
   } catch (err) {

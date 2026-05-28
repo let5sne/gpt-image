@@ -782,6 +782,53 @@ function appendAdminAudit(action, req, detail = {}) {
   }
 }
 
+function readAdminAuditEntries(limit = 20) {
+  if (!ENABLE_LOCAL_STORAGE) {
+    return {
+      total: 0,
+      entries: [],
+    };
+  }
+
+  try {
+    if (!fs.existsSync(ADMIN_AUDIT_LOG_FILE)) {
+      return {
+        total: 0,
+        entries: [],
+      };
+    }
+
+    const lines = fs.readFileSync(ADMIN_AUDIT_LOG_FILE, 'utf-8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const entries = lines
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((left, right) => (toTimeOrZero(right.ts) - toTimeOrZero(left.ts)));
+
+    return {
+      total: entries.length,
+      entries: entries.slice(0, limit),
+    };
+  } catch (err) {
+    log('error', 'admin_audit_read_failed', {
+      message: err.message,
+    });
+    return {
+      total: 0,
+      entries: [],
+    };
+  }
+}
+
 function parsePixels(size) {
   if (!size || size === 'auto') return 0;
   const parts = size.split('x').map(Number);
@@ -1989,6 +2036,12 @@ app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
     by_path: { ...runtimeMetrics.by_path },
     error_codes: { ...runtimeMetrics.error_codes },
   });
+});
+
+app.get('/api/admin/audit-logs', requireAdminAuth, (req, res) => {
+  const limitRaw = Number(req.query && req.query.limit);
+  const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 20;
+  return sendOk(res, req, readAdminAuditEntries(limit));
 });
 
 app.get('/api/admin/email-users', requireAdminAuth, (req, res) => {

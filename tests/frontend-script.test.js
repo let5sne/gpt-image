@@ -84,6 +84,43 @@ test('admin page escapeHtml escapes unsafe markup', () => {
   assert.equal(escapeHtml('& < > " \''), '&amp; &lt; &gt; &quot; &#39;');
 });
 
+test('admin page renderAuditLogs renders newest entries and escapes detail', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const escapeHtmlMatch = html.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(escapeHtmlMatch, 'expected escapeHtml function in admin.html');
+
+  const formatNumberSource = extractFunctionSource(html, 'formatNumber');
+  const statusClassSource = extractFunctionSource(html, 'statusClass');
+  const renderAuditLogsSource = extractFunctionSource(html, 'renderAuditLogs');
+
+  const auditTableWrap = { innerHTML: '' };
+  const auditMeta = { textContent: '', className: '' };
+
+  const context = vm.createContext({ auditTableWrap, auditMeta });
+  vm.runInContext(`
+    ${escapeHtmlMatch[0]}
+    ${formatNumberSource}
+    ${statusClassSource}
+    ${renderAuditLogsSource}
+    globalThis.renderAuditLogs = renderAuditLogs;
+  `, context);
+
+  context.renderAuditLogs([
+    {
+      ts: '2026-05-28T10:10:00.000Z',
+      action: 'admin_credits_grant_by_email',
+      request_id: 'req-3',
+      detail: { email_hash: '<unsafe>', credits: 20 },
+    },
+  ], 1);
+
+  assert.equal(auditMeta.textContent, '最近 1 条');
+  assert.equal(auditMeta.className, 'badge ok');
+  assert.ok(auditTableWrap.innerHTML.includes('admin_credits_grant_by_email'));
+  assert.ok(auditTableWrap.innerHTML.includes('&lt;unsafe&gt;'));
+  assert.equal(auditTableWrap.innerHTML.includes('<unsafe>'), false);
+});
+
 test('index page parseCooldownSeconds parses retry seconds safely', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
   const fnSource = extractFunctionSource(html, 'parseCooldownSeconds');

@@ -165,6 +165,21 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/metrics
 该接口返回进程 uptime、请求总量、错误总量、按状态码统计、按路径统计和错误码统计。
 管理员写操作（补偿、发码、撤销）会追加写入 `ADMIN_AUDIT_LOG_FILE`（JSONL），用于审计追踪。
 
+最近审计记录：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/audit-logs?limit=20"
+```
+
+该接口返回最近的管理员审计记录，包含：
+
+- `action`
+- `request_id`
+- `ts`
+- `detail`
+
+浏览器后台 [public/admin.html](public/admin.html) 也会同步展示“最近审计记录”面板，便于运营直接核对最近一次补偿、批量发码或撤销动作。
+
 ### 管理员邮箱用户查询
 
 浏览器页面：`http://localhost:3000/admin.html`
