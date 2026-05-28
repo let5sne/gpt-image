@@ -119,6 +119,36 @@ test('admin page renderAuditLogs renders newest entries and escapes detail', () 
   assert.ok(auditTableWrap.innerHTML.includes('admin_credits_grant_by_email'));
   assert.ok(auditTableWrap.innerHTML.includes('&lt;unsafe&gt;'));
   assert.equal(auditTableWrap.innerHTML.includes('<unsafe>'), false);
+  assert.ok(auditTableWrap.innerHTML.includes('data-copy-label="request_id"'));
+  assert.ok(auditTableWrap.innerHTML.includes('data-copy-label="detail"'));
+});
+
+test('admin page copyText uses clipboard when available', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const copyTextMatch = html.match(/async function copyText\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(copyTextMatch, 'expected copyText function in admin.html');
+
+  const calls = [];
+  const context = vm.createContext({
+    navigator: {
+      clipboard: {
+        async writeText(value) {
+          calls.push(value);
+        },
+      },
+    },
+    document: {
+      createElement() { throw new Error('fallback should not run'); },
+      body: { appendChild() {}, removeChild() {} },
+      execCommand() { return false; },
+    },
+  });
+
+  vm.runInContext(`${copyTextMatch[0]}; globalThis.copyText = copyText;`, context);
+  const ok = await context.copyText('req-123');
+
+  assert.equal(ok, true);
+  assert.equal(calls[0], 'req-123');
 });
 
 test('admin page renderErrorSummary renders top errors and request totals', () => {

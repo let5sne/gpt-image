@@ -191,6 +191,7 @@ curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/audit-log
 
 - 按动作筛选审计记录
 - 独立刷新审计面板
+- 一键复制 `request_id` 与明细 JSON（便于排障协作）
 - 快速核对最近一次补偿、批量发码或撤销动作
 
 ### 管理员邮箱用户查询

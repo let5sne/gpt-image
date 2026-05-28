@@ -377,6 +377,20 @@ h1 {
   line-height: 1.45;
 }
 
+.copy-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: .78rem;
+}
+
+.copy-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 920px) {
   .topbar,
   .main,
@@ -737,12 +751,22 @@ function renderAuditLogs(entries, total) {
 
   const rows = entries.map((entry) => {
     const detailText = escapeHtml(JSON.stringify(entry.detail || {}, null, 2));
+    const requestId = String(entry.request_id || '-');
+    const rawDetail = JSON.stringify(entry.detail || {}, null, 2);
     return `
       <tr>
         <td><span class="badge ${statusClass(entry.action)}">${escapeHtml(entry.action || '-')}</span></td>
-        <td class="mono">${escapeHtml(entry.request_id || '-')}</td>
+        <td>
+          <div class="copy-group">
+            <span class="mono">${escapeHtml(requestId)}</span>
+            <button class="copy-btn" type="button" data-copy="${escapeHtml(requestId)}" data-copy-label="request_id">复制</button>
+          </div>
+        </td>
         <td>${escapeHtml(entry.ts ? new Date(entry.ts).toLocaleString('zh-CN') : '-')}</td>
-        <td><div class="prompt mono audit-detail">${detailText}</div></td>
+        <td>
+          <div class="prompt mono audit-detail">${detailText}</div>
+          <button class="copy-btn" type="button" data-copy="${escapeHtml(rawDetail)}" data-copy-label="detail">复制明细</button>
+        </td>
       </tr>
     `;
   }).join('');
@@ -767,6 +791,27 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;',
   }[char]));
+}
+
+async function copyText(value) {
+  const text = String(value || '');
+  if (!text) return false;
+
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'absolute';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return ok;
 }
 
 function renderOverview(data) {
@@ -948,6 +993,22 @@ renderRecentOperation();
 refreshBtn.addEventListener('click', loadOverview);
 auditRefreshBtn.addEventListener('click', loadAuditLogs);
 auditActionFilter.addEventListener('change', loadAuditLogs);
+auditTableWrap.addEventListener('click', async (event) => {
+  const button = event.target && typeof event.target.closest === 'function'
+    ? event.target.closest('button[data-copy]')
+    : null;
+  if (!button) return;
+
+  const value = button.getAttribute('data-copy') || '';
+  const label = button.getAttribute('data-copy-label') || '内容';
+  try {
+    const ok = await copyText(value);
+    if (!ok) throw new Error('copy failed');
+    setStatus(`已复制 ${label}。`, 'ok');
+  } catch (err) {
+    setStatus(`复制 ${label} 失败，请手动复制。`, 'error');
+  }
+});
 emailUsersSearchBtn.addEventListener('click', loadEmailUsers);
 emailUsersQuery.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
