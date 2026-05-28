@@ -8,6 +8,27 @@
 - **前端**：单文件原生 HTML/CSS/JS，零构建
 - **配置**：`.env` 管理 API Key
 
+## 多供应商切换（通过 .env）
+
+通过 `IMAGE_PROVIDER` 切换供应商：
+
+- `replicate`：走 Replicate 异步任务
+- `openai` / `openai-compatible` / `openrouter` / `siliconflow` / `together` / `minimax` / `doubao` / `volcengine`：走 OpenAI 兼容接口
+
+OpenAI 兼容供应商读取规则：
+
+1. 优先读取供应商前缀变量：`<PROVIDER>_IMAGE_API_BASE|KEY|MODEL|BYPASS_SECRET`
+2. 如果前缀变量未配置，则回退到通用：`IMAGE_API_BASE|KEY|MODEL|BYPASS_SECRET`
+
+示例：
+
+```bash
+IMAGE_PROVIDER=openrouter
+OPENROUTER_IMAGE_API_BASE=https://openrouter.ai/api
+OPENROUTER_IMAGE_API_KEY=sk-or-xxx
+OPENROUTER_IMAGE_API_MODEL=openai/gpt-image-2
+```
+
 ## 当前已落地的生产保护
 
 - 接口鉴权：`AUTH_REQUIRED=true` 时，`/api/generate` 需要 `x-app-token` 或 `Authorization: Bearer <token>`。
@@ -151,6 +172,25 @@ vercel --prod
 ### GET `/api/health`
 
 健康检查。
+
+## Credits 与兑换码
+
+第一版支持人工售卖兑换码：
+
+- 开启：`CREDITS_ENABLED=true`
+- 兑换码账本：默认 `storage/credits.json`
+- 用户兑换后会得到匿名 `user_token`，前端保存在浏览器本地。
+- 生成图片时按质量扣 credits：`low=3`、`medium=8`、`auto/high=20`。
+- 生成前冻结 credits，成功后结算，失败或超时释放。
+
+生成兑换码：
+
+```bash
+CREDIT_CODE_PEPPER=replace-with-real-secret \
+npm run codes:create -- --count 20 --credits 100 --name launch-batch --prefix IMG
+```
+
+命令会输出明文兑换码 CSV；明文只展示一次，服务端文件只保存 hash。
 
 ## 后续扩展点（已留好接入位）
 

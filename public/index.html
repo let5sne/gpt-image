@@ -49,7 +49,7 @@ body {
 /* ── Header ──────────────────────────────── */
 header {
   text-align: center;
-  margin-bottom: 48px;
+  margin-bottom: 36px;
 }
 .eyebrow {
   display: inline-block;
@@ -77,6 +77,144 @@ h1 em {
   height: 1px;
   background: var(--gold-dim);
   margin: 18px auto 0;
+}
+
+/* ── Pricing Section ─────────────────────── */
+.pricing-section {
+  width: 100%;
+  max-width: 940px;
+  margin-bottom: 24px;
+}
+.pricing-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.pricing-title {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.7rem;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--text);
+}
+.pricing-copy {
+  max-width: 420px;
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.6;
+  text-align: right;
+}
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.plan-card {
+  position: relative;
+  min-height: 184px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.01)),
+    var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color .2s, transform .2s var(--ease-out), box-shadow .2s;
+}
+.plan-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-top: 1px solid rgba(201,168,76,.38);
+  opacity: .55;
+  pointer-events: none;
+}
+.plan-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(201,168,76,.28);
+  box-shadow: 0 18px 45px rgba(0,0,0,.34), 0 0 32px rgba(201,168,76,.08);
+}
+.plan-card.featured {
+  border-color: rgba(201,168,76,.42);
+  box-shadow: 0 0 0 1px rgba(201,168,76,.08) inset;
+}
+.plan-badge {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+  color: var(--gold);
+  font-size: .62rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.plan-name {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: .74rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.plan-price {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--text);
+}
+.plan-price strong {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 2.3rem;
+  line-height: .95;
+  font-weight: 600;
+}
+.plan-price span {
+  color: var(--muted);
+  font-size: .72rem;
+}
+.plan-credits {
+  margin-top: 8px;
+  color: var(--gold);
+  font-size: .86rem;
+  font-weight: 600;
+}
+.plan-usage {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.55;
+}
+.plan-btn {
+  margin-top: 14px;
+  width: 100%;
+  height: 38px;
+  background: transparent;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: .76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .18s, color .18s, background .18s;
+}
+.plan-btn:hover {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+  background: rgba(201,168,76,.05);
+}
+.featured .plan-btn {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #0d0b07;
+}
+.featured .plan-btn:hover {
+  background: #d9b75c;
+  color: #0d0b07;
 }
 
 /* ── Creation Card ───────────────────────── */
@@ -149,11 +287,38 @@ textarea:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(201,1
   outline: none;
 }
 .helper-row input:focus { border-color: var(--gold-dim); }
+.helper-row button {
+  height: 38px;
+  padding: 0 14px;
+  background: transparent;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-sm);
+  color: var(--gold);
+  font-size: .76rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.helper-row button:hover { border-color: var(--gold-dim); }
 .helper-note {
   margin-top: 8px;
   color: var(--muted);
   font-size: .72rem;
 }
+.wallet-row {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: rgba(255,255,255,.02);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: .76rem;
+}
+.wallet-row strong { color: var(--text); font-weight: 600; }
 .size-wrap {
   position: relative;
   flex: 1;
@@ -409,8 +574,120 @@ h2 {
 }
 .gallery-item:hover .g-copy { opacity: 1; }
 
+.gallery-item-pending {
+  position: relative;
+  min-height: 320px;
+  background:
+    linear-gradient(135deg, rgba(201,168,76,.12), rgba(255,255,255,.02)),
+    var(--surface);
+  border-color: rgba(201,168,76,.28);
+}
+.gallery-item-pending::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.06) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: pendingShimmer 1.8s infinite;
+  pointer-events: none;
+}
+@keyframes pendingShimmer {
+  to { transform: translateX(100%); }
+}
+.pending-frame {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  position: relative;
+  overflow: hidden;
+}
+.pending-frame::after {
+  content: '';
+  position: absolute;
+  inset: 16px;
+  border-radius: 20px;
+  background: linear-gradient(100deg, rgba(255,255,255,.02) 8%, rgba(255,255,255,.08) 18%, rgba(255,255,255,.02) 33%);
+  background-size: 200% 100%;
+  animation: thumbnailShimmer 1.5s linear infinite;
+}
+@keyframes thumbnailShimmer {
+  to { background-position: 200% 0; }
+}
+.pending-orb {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 1px solid rgba(201,168,76,.25);
+  background: radial-gradient(circle at 30% 30%, rgba(201,168,76,.7), rgba(201,168,76,.14) 55%, rgba(201,168,76,.04) 72%, transparent 73%);
+  box-shadow: 0 0 0 10px rgba(201,168,76,.03), 0 0 35px rgba(201,168,76,.16);
+}
+.pending-copy {
+  padding: 14px;
+}
+.pending-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,168,76,.24);
+  color: var(--gold);
+  font-size: .62rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.pending-title {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: .92rem;
+  line-height: 1.55;
+}
+.pending-status {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .68rem;
+  letter-spacing: .04em;
+}
+.pending-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 0 8px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,168,76,.22);
+  color: var(--gold);
+  font-size: .62rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.gallery-item-active {
+  border-color: rgba(201,168,76,.48);
+  box-shadow: 0 0 0 1px rgba(201,168,76,.12) inset, 0 18px 40px rgba(0,0,0,.45);
+}
+.gallery-item-active .g-prompt {
+  color: var(--text);
+}
+.gallery-item-active .g-prompt::before {
+  background: var(--gold);
+}
+
 /* ── Responsive ──────────────────────────── */
 @media (max-width: 520px) {
+  body { padding-top: 44px; }
+  header { margin-bottom: 28px; }
+  .pricing-section { margin-bottom: 20px; }
+  .pricing-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .pricing-copy { text-align: left; }
+  .pricing-grid { grid-template-columns: 1fr; }
   .card { padding: 24px 20px; }
   .controls { flex-direction: column; }
   #btn { flex: none; width: 100%; }
@@ -424,6 +701,39 @@ h2 {
   <h1>Image <em>Studio</em></h1>
   <div class="header-rule"></div>
 </header>
+
+<section class="pricing-section" aria-labelledby="pricingTitle">
+  <div class="pricing-head">
+    <h2 class="pricing-title" id="pricingTitle">兑换包</h2>
+    <p class="pricing-copy">购买后获得兑换码，在下方输入即可增加 credits。生成失败会自动释放已冻结额度。</p>
+  </div>
+  <div class="pricing-grid">
+    <article class="plan-card">
+      <span class="plan-badge">Trial</span>
+      <div class="plan-name">体验包</div>
+      <div class="plan-price"><strong>¥9.9</strong><span>一次性</span></div>
+      <div class="plan-credits">100 credits</div>
+      <p class="plan-usage">约 33 张 Low，12 张 Medium，5 张 Auto。</p>
+      <button class="plan-btn" type="button" onclick="focusRedeem('体验包')">兑换使用</button>
+    </article>
+    <article class="plan-card featured">
+      <span class="plan-badge">Popular</span>
+      <div class="plan-name">标准包</div>
+      <div class="plan-price"><strong>¥29</strong><span>一次性</span></div>
+      <div class="plan-credits">320 credits</div>
+      <p class="plan-usage">约 106 张 Low，40 张 Medium，16 张 Auto。</p>
+      <button class="plan-btn" type="button" onclick="focusRedeem('标准包')">兑换使用</button>
+    </article>
+    <article class="plan-card">
+      <span class="plan-badge">Pro</span>
+      <div class="plan-name">专业包</div>
+      <div class="plan-price"><strong>¥99</strong><span>一次性</span></div>
+      <div class="plan-credits">1200 credits</div>
+      <p class="plan-usage">约 400 张 Low，150 张 Medium，60 张 Auto。</p>
+      <button class="plan-btn" type="button" onclick="focusRedeem('专业包')">兑换使用</button>
+    </article>
+  </div>
+</section>
 
 <div class="card">
   <label class="field-label" for="prompt">Describe your vision</label>
@@ -444,12 +754,27 @@ h2 {
         </optgroup>
       </select>
     </div>
+    <div class="size-wrap">
+      <select id="quality" onchange="updateEstimatedCost()">
+        <option value="low">Low · 3 credits</option>
+        <option value="medium">Medium · 8 credits</option>
+        <option value="auto" selected>Auto · 20 credits</option>
+      </select>
+    </div>
     <button id="btn" onclick="generate()">Generate</button>
+  </div>
+  <div class="wallet-row" id="walletRow">
+    <span>余额 <strong id="creditBalance">未兑换</strong></span>
+    <span>预计消耗 <strong id="estimatedCost">20</strong> credits</span>
+  </div>
+  <div class="helper-row">
+    <input id="redeemCode" type="text" placeholder="兑换码" />
+    <button type="button" onclick="redeemCode()">兑换</button>
   </div>
   <div class="helper-row">
     <input id="accessToken" type="password" placeholder="Access Token（若后端开启鉴权请填写）" />
   </div>
-  <p class="helper-note">已自动限制 prompt 长度与请求频率，失败时会自动重试 1 次。</p>
+  <p class="helper-note">已自动限制 prompt 长度（4000 字符）与请求频率，失败时会自动重试 1 次。</p>
   <div class="result" id="result"></div>
 </div>
 
@@ -463,13 +788,33 @@ h2 {
 </section>
 
 <script>
-/* ── 复制 prompt（事件委托）──────────────── */
+/* ── 点击交互（复制 prompt / 预览作品）──────────── */
 document.addEventListener('click', function (e) {
-  const el = e.target.closest('[data-prompt]');
-  if (!el) return;
-  const text = el.dataset.prompt;
+  const galleryCopy = e.target.closest('#gallery .g-copy');
+  if (galleryCopy) {
+    const card = galleryCopy.closest('.gallery-item');
+    if (!card) return;
+    const text = card.dataset.prompt || '';
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const prev = galleryCopy.textContent;
+      galleryCopy.textContent = '✓ Copied';
+      setTimeout(() => { galleryCopy.textContent = prev; }, 1600);
+    });
+    return;
+  }
+
+  const galleryCard = e.target.closest('#gallery .gallery-item');
+  if (galleryCard) {
+    renderPreviewFromGalleryItem(galleryCard);
+    return;
+  }
+
+  const promptTag = e.target.closest('.prompt-tag');
+  if (!promptTag) return;
+  const text = promptTag.dataset.prompt;
   navigator.clipboard.writeText(text).then(() => {
-    const hint = el.querySelector('.copy-hint, .g-copy');
+    const hint = promptTag.querySelector('.copy-hint');
     if (hint) {
       const prev = hint.textContent;
       hint.textContent = '✓ Copied';
@@ -506,6 +851,115 @@ function persistAccessToken(token) {
   localStorage.setItem('image_studio_access_token', token);
 }
 
+function getUserToken() {
+  return localStorage.getItem('image_studio_user_token') || '';
+}
+
+function persistUserToken(token) {
+  if (token) localStorage.setItem('image_studio_user_token', token);
+}
+
+function getQualityCost() {
+  const quality = document.getElementById('quality')?.value || 'auto';
+  return { low: 3, medium: 8, auto: 20, high: 20 }[quality] || 20;
+}
+
+function updateEstimatedCost() {
+  const el = document.getElementById('estimatedCost');
+  if (el) el.textContent = String(getQualityCost());
+}
+
+function focusRedeem(planName) {
+  const input = document.getElementById('redeemCode');
+  const result = document.getElementById('result');
+  if (input) {
+    input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    input.focus();
+  }
+  if (result) {
+    result.innerHTML = `<p class="helper-note">${escHtml(planName)}兑换码可在这里输入。</p>`;
+  }
+}
+
+function renderWallet(wallet) {
+  const balance = document.getElementById('creditBalance');
+  if (!balance) return;
+  if (!wallet) {
+    balance.textContent = '未兑换';
+    return;
+  }
+  const reserved = wallet.reserved_credits ? ` / 冻结 ${wallet.reserved_credits}` : '';
+  balance.textContent = `${wallet.available_credits}${reserved}`;
+}
+
+async function loadWallet() {
+  const token = getUserToken();
+  if (!token) {
+    renderWallet(null);
+    return;
+  }
+  try {
+    const api = await requestWithRetry('/api/wallet', {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 0);
+    renderWallet(api.data);
+  } catch (e) {
+    renderWallet(null);
+  }
+}
+
+async function redeemCode() {
+  const input = document.getElementById('redeemCode');
+  const code = input ? input.value.trim() : '';
+  const result = document.getElementById('result');
+  if (!code) {
+    if (input) input.focus();
+    return;
+  }
+
+  try {
+    const api = await requestWithRetry('/api/redeem', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ code, user_token: getUserToken() }),
+    }, 0);
+    persistUserToken(api.data.user_token);
+    renderWallet(api.data);
+    if (input) input.value = '';
+    if (result) result.innerHTML = `<p class="helper-note">兑换成功，已增加 ${escHtml(api.data.credits_added)} credits。</p>`;
+  } catch (e) {
+    const rid = e.requestId ? `（request_id: ${escHtml(e.requestId)}）` : '';
+    if (result) result.innerHTML = `<p class="error-msg">${escHtml(e.message)}${rid}</p>`;
+  }
+}
+
+async function parseApiResponse(res) {
+  const contentType = res.headers.get('content-type') || '';
+  const text = await res.text();
+  if (!text) {
+    return {
+      success: res.ok,
+      data: null,
+      request_id: res.headers.get('x-request-id') || null,
+    };
+  }
+
+  if (!contentType.includes('application/json')) {
+    const err = new Error(text.trim().startsWith('<') ? '服务返回了非 JSON 页面，请刷新后重试。' : text.slice(0, 180));
+    err.requestId = res.headers.get('x-request-id') || null;
+    throw err;
+  }
+
+  try {
+    return normalizeApiResponse(JSON.parse(text));
+  } catch (e) {
+    const err = new Error('服务返回的 JSON 格式异常，请稍后重试。');
+    err.requestId = res.headers.get('x-request-id') || null;
+    throw err;
+  }
+}
+
 async function requestWithRetry(url, options, retries = 1) {
   let attempts = 0;
   let lastError = null;
@@ -513,7 +967,7 @@ async function requestWithRetry(url, options, retries = 1) {
     attempts += 1;
     try {
       const res = await fetch(url, options);
-      const json = normalizeApiResponse(await res.json());
+      const json = await parseApiResponse(res);
       if (res.ok && json.success) {
         return json;
       }
@@ -535,13 +989,417 @@ async function requestWithRetry(url, options, retries = 1) {
   throw lastError || new Error('请求失败');
 }
 
+function getAuthHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = getAccessToken();
+  if (token) headers['x-app-token'] = token;
+  const userToken = getUserToken();
+  if (userToken) headers['x-user-token'] = userToken;
+  return headers;
+}
+
+function renderImages(data) {
+  const images = Array.isArray(data.images) ? data.images : [];
+  const normalizedImages = images.length > 0 ? images : buildImagesFromOutput(data.output, data.prompt);
+  let html = '';
+  normalizedImages.forEach(img => {
+    const src = img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '');
+    if (!src) return;
+    html += `
+      <img class="result-img" src="${src}" alt="generated" />
+      <div class="result-meta">
+        <span>${escHtml(data.model)}</span>
+        ${data.charged_credits ? `<span>${escHtml(data.charged_credits)} credits</span>` : ''}
+      </div>
+      <div class="prompt-tag" data-prompt="${escAttr(data.prompt)}">
+        <span class="prompt-tag-text">${escHtml(data.prompt)}</span>
+        <span class="copy-hint">点击复制</span>
+      </div>`;
+  });
+  return html || '<p class="error-msg">生成完成，但未返回图片。</p>';
+}
+
+function escapeSelector(value) {
+  const raw = String(value || '');
+  if (window.CSS && typeof window.CSS.escape === 'function') {
+    return window.CSS.escape(raw);
+  }
+  return raw.replace(/(["\\])/g, '\\$1');
+}
+
+function formatDuration(ms) {
+  const value = Number(ms || 0);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function createGalleryItem(item, index = 0, jobId = '') {
+  const src = item.local_url || item.remote_url || item.url || '';
+  if (!src) return '';
+  const time = item.created_at ? new Date(item.created_at).toLocaleString('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  }) : '';
+  const duration = formatDuration(item.took_ms);
+  const jobAttr = jobId ? ` data-job-id="${escAttr(jobId)}"` : '';
+  const delay = Math.min(index, 9) * 35;
+  return `<div class="gallery-item" style="animation-delay:${delay}ms"${jobAttr}
+           data-prompt="${escAttr(item.prompt || '')}"
+           data-url="${escAttr(src)}"
+           data-model="${escAttr(item.model || '')}"
+           data-size="${escAttr(item.size || '')}"
+           data-took-ms="${escAttr(item.took_ms || 0)}"
+           data-charged-credits="${escAttr(item.charged_credits || '')}"
+           data-status="succeeded">
+    <img src="${escAttr(src)}" alt="generated" loading="lazy" />
+    <div class="gallery-info">
+      <div class="g-prompt">${escHtml(item.prompt || '')}</div>
+      <div class="g-meta">
+        <span>${escHtml(item.size || 'auto')}</span>
+        <span class="g-dot"></span>
+        <span>${escHtml(item.model || '')}</span>
+        ${duration ? `<span class="g-dot"></span><span>${duration}</span>` : ''}
+        ${time ? `<span class="g-dot"></span><span>${time}</span>` : ''}
+        <span class="g-copy">点击复制 prompt</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function createGalleryItemFromResult(data, jobId) {
+  const images = Array.isArray(data.images) ? data.images : [];
+  const normalizedImages = images.length > 0 ? images : buildImagesFromOutput(data.output, data.prompt);
+  const firstImage = normalizedImages[0] || {};
+  return createGalleryItem({
+    prompt: data.prompt,
+    model: data.model,
+    size: data.size,
+    took_ms: data.took_ms,
+    charged_credits: data.charged_credits,
+    local_url: firstImage.local_url || null,
+    remote_url: firstImage.url || firstImage.remote_url || null,
+    created_at: data.created_at || new Date().toISOString(),
+  }, 0, jobId);
+}
+
+function createPendingGalleryItem(data) {
+  return `
+    <div class="gallery-item gallery-item-pending" data-job-id="${escAttr(data.job_id)}" data-status="${escAttr(data.status || 'processing')}" data-prompt="${escAttr(data.prompt || '')}" data-model="${escAttr(data.model || '')}" data-size="${escAttr(data.size || '')}">
+      <div class="pending-frame">
+        <div class="pending-orb" aria-hidden="true"></div>
+      </div>
+      <div class="gallery-info pending-copy">
+        <span class="pending-kicker">Processing</span>
+        <div class="pending-title">${escHtml(data.prompt || 'Generating image')}</div>
+        <div class="g-meta">
+          <span>${escHtml(data.size || 'auto')}</span>
+          <span class="g-dot"></span>
+          <span>${escHtml(data.model || 'replicate')}</span>
+          <span class="g-copy pending-status">排队中 · 0s</span>
+        </div>
+        <div class="pending-progress">排队中</div>
+      </div>
+    </div>`;
+}
+
+function upsertPendingGalleryItem(data, seconds = 0) {
+  const section = document.getElementById('gallerySection');
+  const container = document.getElementById('gallery');
+  const count = document.getElementById('galleryCount');
+  if (!section || !container) return;
+
+  section.style.display = '';
+  const selector = `[data-job-id="${escapeSelector(data.job_id)}"]`;
+  const existing = container.querySelector(selector);
+  if (!existing) {
+    container.insertAdjacentHTML('afterbegin', createPendingGalleryItem(data));
+  }
+
+  const card = container.querySelector(selector);
+  if (card) {
+    card.dataset.status = data.status || 'processing';
+    const status = card.querySelector('.pending-status');
+    if (status) {
+      status.textContent = `${formatPendingStatus(data.status, seconds)}`;
+    }
+    const title = card.querySelector('.pending-title');
+    if (title && data.prompt) {
+      title.textContent = data.prompt;
+    }
+    const badge = card.querySelector('.pending-progress');
+    if (badge) {
+      badge.textContent = getPendingBadge(data.status);
+    }
+  }
+
+  if (count && !count.textContent) {
+    count.textContent = '进行中';
+  }
+}
+
+function removePendingGalleryItem(jobId) {
+  const container = document.getElementById('gallery');
+  if (!container) return;
+  const card = container.querySelector(`[data-job-id="${escapeSelector(jobId)}"]`);
+  if (card && card.parentElement) {
+    card.parentElement.removeChild(card);
+  }
+}
+
+function refreshGalleryCountFromDom() {
+  const count = document.getElementById('galleryCount');
+  const items = document.querySelectorAll('#gallery .gallery-item:not(.gallery-item-pending)');
+  if (count) {
+    count.textContent = items.length ? `${items.length} 张` : '进行中';
+  }
+}
+
+function replacePendingGalleryItem(jobId, data) {
+  const section = document.getElementById('gallerySection');
+  const container = document.getElementById('gallery');
+  if (!section || !container) return false;
+
+  const html = createGalleryItemFromResult(data, jobId);
+  if (!html) return false;
+
+  section.style.display = '';
+  const card = container.querySelector(`[data-job-id="${escapeSelector(jobId)}"]`);
+  if (card) {
+    card.outerHTML = html;
+  } else {
+    container.insertAdjacentHTML('afterbegin', html);
+  }
+  refreshGalleryCountFromDom();
+  syncActivePreviewFromKey();
+  return true;
+}
+
+function isLikelyImageUrl(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('data:image/')) return true;
+  if (/^https?:\/\//i.test(trimmed)) return true;
+  if (trimmed.startsWith('/storage/')) return true;
+  return false;
+}
+
+function normalizeReplicateOutput(output) {
+  const urls = [];
+
+  function visit(value) {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value === 'string') {
+      if (isLikelyImageUrl(value)) urls.push(value.trim());
+      return;
+    }
+    if (typeof value === 'object') {
+      Object.values(value).forEach(visit);
+    }
+  }
+
+  visit(output);
+  return [...new Set(urls)];
+}
+
+function buildImagesFromOutput(output, prompt) {
+  return normalizeReplicateOutput(output).map((url) => ({
+    url,
+    b64_json: null,
+    local_url: url,
+    prompt,
+  }));
+}
+
+let latestGenerateRequestId = 0;
+const activeSubmissionKeys = new Set();
+let currentPreviewSelectionKey = '';
+
+function buildSubmissionKey(prompt, size, quality) {
+  return [prompt.trim(), size, quality].join('::');
+}
+
+function getPendingBadge(status) {
+  if (status === 'starting' || status === 'queued' || status === 'pending') {
+    return '排队中';
+  }
+  if (status === 'processing') {
+    return '处理中';
+  }
+  if (status === 'succeeded') {
+    return '已完成';
+  }
+  if (status === 'failed' || status === 'canceled' || status === 'timed_out') {
+    return '已结束';
+  }
+  return '处理中';
+}
+
+function formatPendingStatus(status, seconds = 0) {
+  return `${getPendingBadge(status)} · ${seconds}s`;
+}
+
+function setActiveGalleryItem(card) {
+  document.querySelectorAll('#gallery .gallery-item-active').forEach((item) => {
+    item.classList.remove('gallery-item-active');
+  });
+  if (card) {
+    card.classList.add('gallery-item-active');
+  }
+}
+
+function makePreviewSelectionKey(prompt, src) {
+  return [String(prompt || '').trim(), String(src || '')].join('::');
+}
+
+function syncActivePreviewFromKey() {
+  const cards = document.querySelectorAll('#gallery .gallery-item');
+  cards.forEach((card) => {
+    const src = card.dataset.url || '';
+    const prompt = card.dataset.prompt || '';
+    const key = makePreviewSelectionKey(prompt, src);
+    if (key && key === currentPreviewSelectionKey) {
+      setActiveGalleryItem(card);
+    }
+  });
+}
+
+function renderPreviewFromGalleryItem(card) {
+  if (!card) return;
+  const status = card.dataset.status || '';
+  if (status === 'processing' || status === 'queued' || status === 'starting') {
+    return;
+  }
+
+  const src = card.dataset.url || '';
+  const prompt = card.dataset.prompt || '';
+  const model = card.dataset.model || '';
+  const size = card.dataset.size || '';
+  const tookMs = Number(card.dataset.tookMs || 0);
+  const data = {
+    images: src ? [{ url: src, b64_json: null, local_url: src, prompt }] : [],
+    prompt,
+    model,
+    size,
+    took_ms: Number.isFinite(tookMs) ? tookMs : 0,
+    charged_credits: card.dataset.chargedCredits ? Number(card.dataset.chargedCredits) : 0,
+  };
+
+  const result = document.getElementById('result');
+  if (result) {
+    result.innerHTML = renderImages(data);
+  }
+  currentPreviewSelectionKey = makePreviewSelectionKey(prompt, src);
+  setActiveGalleryItem(card);
+}
+
+async function enrichGeneratedData(data) {
+  const images = Array.isArray(data.images) ? data.images : [];
+  if (images.length > 0) {
+    return data;
+  }
+
+  const outputImages = buildImagesFromOutput(data.output, data.prompt);
+  if (outputImages.length > 0) {
+    return {
+      ...data,
+      images: outputImages,
+    };
+  }
+
+  try {
+    const api = await requestWithRetry('/api/gallery', {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 0);
+    const list = Array.isArray(api.data) ? api.data : [];
+    const match = list.find((item) => {
+      if (!item || !item.prompt) return false;
+      if (data.prompt && item.prompt !== data.prompt) return false;
+      if (data.model && item.model && item.model !== data.model) return false;
+      return Boolean(item.local_url || item.remote_url);
+    });
+
+    if (match) {
+      return {
+        ...data,
+        images: [{
+          url: match.local_url || match.remote_url,
+          b64_json: null,
+          local_url: match.local_url || null,
+          prompt: match.prompt,
+        }],
+        model: data.model || match.model,
+        prompt: data.prompt || match.prompt,
+        took_ms: data.took_ms || match.took_ms || 0,
+      };
+    }
+  } catch (err) {
+    console.warn('gallery fallback failed', err);
+  }
+
+  return data;
+}
+
+async function pollJob(jobId, resultEl) {
+  const started = Date.now();
+  const maxWaitMs = 20 * 60 * 1000;
+
+  while (Date.now() - started < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    const api = await requestWithRetry(`/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 0);
+    const job = api.data || {};
+
+    if (job.status === 'succeeded') {
+      const baseResult = job.result || {
+        images: job.images || [],
+        model: job.model,
+        prompt: job.prompt,
+        took_ms: Date.now() - started,
+      };
+      const result = {
+        ...baseResult,
+        output: baseResult.output != null ? baseResult.output : job.output,
+        size: baseResult.size || job.size,
+        model: baseResult.model || job.model,
+        prompt: baseResult.prompt || job.prompt,
+      };
+      return enrichGeneratedData(result);
+    }
+
+    if (['failed', 'canceled', 'timed_out'].includes(job.status)) {
+      const err = new Error(job.error || '生成失败，请稍后重试。');
+      err.requestId = api.request_id || null;
+      throw err;
+    }
+
+    const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
+    upsertPendingGalleryItem({
+      job_id: jobId,
+      prompt: job.prompt,
+      model: job.model,
+      size: job.size,
+      status: job.status || 'processing',
+    }, seconds);
+    resultEl.innerHTML = `<div class="generating">Creating<span class="dots"><span>.</span><span>.</span><span>.</span></span><div class="helper-note">任务已加入作品集，可继续提交下一张。</div></div>`;
+  }
+
+  throw new Error('生成任务仍在处理中，请稍后刷新画廊查看。');
+}
+
 /* ── 生成图片 ─────────────────────────────── */
 async function generate() {
   const promptEl = document.getElementById('prompt');
   const prompt = promptEl.value.trim();
   if (!prompt) { promptEl.focus(); return; }
-  if (prompt.length > 800) {
-    document.getElementById('result').innerHTML = '<p class="error-msg">prompt 超过 800 字符，请精简后重试。</p>';
+  if (prompt.length > 4000) {
+    document.getElementById('result').innerHTML = '<p class="error-msg">prompt 超过 4000 字符，请精简后重试。</p>';
     return;
   }
 
@@ -549,46 +1407,75 @@ async function generate() {
   const result = document.getElementById('result');
   const token = getAccessToken();
   persistAccessToken(token);
+  const size = document.getElementById('size').value;
+  const quality = document.getElementById('quality').value;
+  const submissionKey = buildSubmissionKey(prompt, size, quality);
 
-  btn.disabled = true;
-  btn.textContent = 'Generating…';
+  if (activeSubmissionKeys.has(submissionKey)) {
+    result.innerHTML = '<p class="error-msg">相同任务已经在队列里了，请不要重复提交。</p>';
+    return;
+  }
+
+  activeSubmissionKeys.add(submissionKey);
+
+  const requestId = ++latestGenerateRequestId;
   result.innerHTML = `<div class="generating">Creating<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>`;
 
-  try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['x-app-token'] = token;
+  let pendingJobId = null;
+  let replacedPending = false;
 
+  try {
     const api = await requestWithRetry('/api/generate', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ prompt, size: document.getElementById('size').value })
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        prompt,
+        size,
+        quality,
+      })
     });
 
-    const data = api.data || {};
+    let data = api.data || {};
+    if (data.job_id && data.status !== 'succeeded') {
+      pendingJobId = data.job_id;
+      upsertPendingGalleryItem({
+        job_id: data.job_id,
+        prompt,
+        model: data.model || 'replicate',
+        size: document.getElementById('size').value,
+        status: data.status || 'processing',
+      }, 0);
+      data = await pollJob(data.job_id, result);
+      replacedPending = replacePendingGalleryItem(pendingJobId, data);
+      pendingJobId = null;
+    }
 
-    let html = '';
-    data.images.forEach(img => {
-      const src = img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '');
-      if (!src) return;
-      html += `
-        <img class="result-img" src="${src}" alt="generated" />
-        <div class="result-meta">
-          <span>${escHtml(data.model)}</span>
-          <span>${(data.took_ms / 1000).toFixed(1)}s</span>
-        </div>
-        <div class="prompt-tag" data-prompt="${escAttr(data.prompt)}">
-          <span class="prompt-tag-text">${escHtml(data.prompt)}</span>
-          <span class="copy-hint">点击复制</span>
-        </div>`;
-    });
-    result.innerHTML = html;
-    loadGallery();
+    if (requestId === latestGenerateRequestId) {
+      result.innerHTML = renderImages(data);
+      if (data.wallet) renderWallet(data.wallet);
+      if (Array.isArray(data.images) && data.images[0] && data.images[0].url) {
+        currentPreviewSelectionKey = makePreviewSelectionKey(data.prompt, data.images[0].url);
+      }
+    }
+    await loadWallet();
+    if (!replacedPending) {
+      await loadGallery();
+    }
   } catch (e) {
+    if (pendingJobId) {
+      removePendingGalleryItem(pendingJobId);
+      pendingJobId = null;
+    }
     const rid = e.requestId ? `（request_id: ${escHtml(e.requestId)}）` : '';
-    result.innerHTML = `<p class="error-msg">${escHtml(e.message)}${rid}</p>`;
+    if (requestId === latestGenerateRequestId) {
+      result.innerHTML = `<p class="error-msg">${escHtml(e.message)}${rid}</p>`;
+    }
+    await loadWallet();
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Generate';
+    if (pendingJobId) {
+      removePendingGalleryItem(pendingJobId);
+    }
+    activeSubmissionKeys.delete(submissionKey);
   }
 }
 
@@ -596,8 +1483,7 @@ async function generate() {
 async function loadGallery() {
   try {
     const res = await fetch('/api/gallery');
-    const raw = await res.json();
-    const normalized = normalizeApiResponse(raw);
+    const normalized = await parseApiResponse(res);
     const list = normalized.data || [];
     const section = document.getElementById('gallerySection');
     const container = document.getElementById('gallery');
@@ -605,28 +1491,8 @@ async function loadGallery() {
     if (!list.length) { section.style.display = 'none'; return; }
     section.style.display = '';
     count.textContent = list.length + ' 张';
-    container.innerHTML = list.map((item, i) => {
-      const src = item.local_url || item.remote_url || '';
-      if (!src) return '';
-      const time = new Date(item.created_at).toLocaleString('zh-CN', {
-        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
-      });
-      return `<div class="gallery-item" style="animation-delay:${Math.min(i, 9) * 35}ms"
-               data-prompt="${escAttr(item.prompt)}">
-        <img src="${src}" alt="generated" loading="lazy" />
-        <div class="gallery-info">
-          <div class="g-prompt">${escHtml(item.prompt)}</div>
-          <div class="g-meta">
-            <span>${escHtml(item.size)}</span>
-            <span class="g-dot"></span>
-            <span>${escHtml(item.model)}</span>
-            <span class="g-dot"></span>
-            <span>${time}</span>
-            <span class="g-copy">点击复制 prompt</span>
-          </div>
-        </div>
-      </div>`;
-    }).join('');
+    container.innerHTML = list.map((item, i) => createGalleryItem(item, i)).join('');
+    syncActivePreviewFromKey();
   } catch (e) {
     console.error('load gallery failed', e);
   }
@@ -649,6 +1515,8 @@ if (cachedToken) {
   if (tokenInput) tokenInput.value = cachedToken;
 }
 
+updateEstimatedCost();
+loadWallet();
 loadGallery();
 </script>
 </body>
