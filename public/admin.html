@@ -502,6 +502,8 @@ function renderEmailUsers(users, total) {
       <td class="mono">${escapeHtml(user.id || '-')}</td>
       <td>${escapeHtml(user.email || '-')}</td>
       <td>${escapeHtml(user.status || 'active')}</td>
+      <td>${user.wallet && user.wallet.linked ? `<span class="badge ok">已关联</span>` : `<span class="badge">未关联</span>`}</td>
+      <td>${escapeHtml(user.wallet ? `${formatNumber(user.wallet.available_credits || 0)} / ${formatNumber(user.wallet.reserved_credits || 0)}` : '0 / 0')}</td>
       <td>${escapeHtml(user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '-')}</td>
       <td>${escapeHtml(user.email_verified_at ? new Date(user.email_verified_at).toLocaleString('zh-CN') : '-')}</td>
     </tr>
@@ -510,7 +512,7 @@ function renderEmailUsers(users, total) {
   emailUsersTableWrap.innerHTML = `
     <table class="table">
       <thead>
-        <tr><th>ID</th><th>邮箱</th><th>状态</th><th>最近登录</th><th>验证时间</th></tr>
+        <tr><th>ID</th><th>邮箱</th><th>状态</th><th>钱包</th><th>余额(可用/冻结)</th><th>最近登录</th><th>验证时间</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>

@@ -928,6 +928,15 @@ function getEmailAuthSession(state, token) {
   return { session, user };
 }
 
+function getEmailAuthUserFromRequest(req) {
+  if (!EMAIL_AUTH_ENABLED) return null;
+  const token = readEmailAuthToken(req);
+  if (!token) return null;
+  const state = readEmailAuthState();
+  const auth = getEmailAuthSession(state, token);
+  return auth ? auth.user : null;
+}
+
 function getUserToken(req) {
   const headerToken = req.headers['x-user-token'];
   if (headerToken && typeof headerToken === 'string') return headerToken.trim();
@@ -955,6 +964,27 @@ function serializeWallet(state, userId) {
     available_credits: account ? account.available_credits : 0,
     reserved_credits: account ? account.reserved_credits : 0,
     recent_ledger: recentLedger,
+  };
+}
+
+function summarizeWalletByEmailUserId(creditState, emailUserId) {
+  const linkedUsers = (creditState.users || []).filter((item) => item.email_user_id === emailUserId);
+  if (!linkedUsers.length) {
+    return {
+      linked: false,
+      wallet_count: 0,
+      available_credits: 0,
+      reserved_credits: 0,
+    };
+  }
+
+  const linkedUserIds = new Set(linkedUsers.map((item) => item.id));
+  const accounts = (creditState.accounts || []).filter((item) => linkedUserIds.has(item.user_id));
+  return {
+    linked: true,
+    wallet_count: accounts.length,
+    available_credits: accounts.reduce((sum, account) => sum + (account.available_credits || 0), 0),
+    reserved_credits: accounts.reduce((sum, account) => sum + (account.reserved_credits || 0), 0),
   };
 }
 
@@ -1910,6 +1940,7 @@ app.get('/api/admin/email-users', requireAdminAuth, (req, res) => {
   const state = readEmailAuthState();
   cleanupEmailAuthState(state);
   writeEmailAuthState(state);
+  const creditState = CREDITS_ENABLED ? creditsRepository.readState() : emptyCreditsState();
 
   const users = (state.users || [])
     .filter((user) => !query || String(user.email || '').includes(query))
@@ -1921,7 +1952,10 @@ app.get('/api/admin/email-users', requireAdminAuth, (req, res) => {
 
   return sendOk(res, req, {
     total: users.length,
-    users: users.slice(0, limit).map(serializeEmailUser),
+    users: users.slice(0, limit).map((user) => ({
+      ...serializeEmailUser(user),
+      wallet: summarizeWalletByEmailUserId(creditState, user.id),
+    })),
   });
 });
 
@@ -2079,6 +2113,8 @@ app.post('/api/redeem', async (req, res) => {
     return sendError(res, req, 400, 'invalid_code', 'redemption code is required');
   }
 
+  const emailAuthUser = getEmailAuthUserFromRequest(req);
+
   return creditsRepository.withLock(() => {
     const state = creditsRepository.readState();
     const codeHash = hashSecret(code);
@@ -2103,6 +2139,7 @@ app.post('/api/redeem', async (req, res) => {
       user = {
         id: crypto.randomUUID(),
         user_token_hash: hashSecret(userToken),
+        email_user_id: emailAuthUser ? emailAuthUser.id : null,
         status: 'active',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -2116,6 +2153,11 @@ app.post('/api/redeem', async (req, res) => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+    }
+
+    if (emailAuthUser && !user.email_user_id) {
+      user.email_user_id = emailAuthUser.id;
+      user.updated_at = new Date().toISOString();
     }
 
     const account = getAccount(state, user.id);

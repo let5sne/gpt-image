@@ -944,14 +944,25 @@ test('GET /api/admin/email-users requires admin token and supports query filter'
   process.env.EMAIL_AUTH_ENABLED = 'true';
   process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
   process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
   const app = loadFreshApp();
 
   const userOneCode = await request(app)
     .post('/api/auth/email/send-code')
     .send({ email: 'alpha@example.com' });
-  await request(app)
+  const alphaVerified = await request(app)
     .post('/api/auth/email/verify-code')
     .send({ email: 'alpha@example.com', code: userOneCode.body.data.dev_code });
+  assert.equal(alphaVerified.status, 200);
+  const alphaToken = alphaVerified.body.data.auth_token;
+
+  const redeemed = await request(app)
+    .post('/api/redeem')
+    .set('x-auth-token', alphaToken)
+    .send({ code: 'TEST-CODE-100' });
+  assert.equal(redeemed.status, 200);
 
   const userTwoCode = await request(app)
     .post('/api/auth/email/send-code')
@@ -971,6 +982,11 @@ test('GET /api/admin/email-users requires admin token and supports query filter'
   assert.equal(allUsers.body.data.total, 2);
   assert.equal(allUsers.body.data.users.length, 2);
   assert.equal(allUsers.body.data.users.every((item) => item.email.includes('@')), true);
+  const alpha = allUsers.body.data.users.find((item) => item.email === 'alpha@example.com');
+  const beta = allUsers.body.data.users.find((item) => item.email === 'beta@example.com');
+  assert.equal(alpha.wallet.linked, true);
+  assert.equal(alpha.wallet.available_credits, 100);
+  assert.equal(beta.wallet.linked, false);
 
   const filtered = await request(app)
     .get('/api/admin/email-users')
@@ -979,6 +995,60 @@ test('GET /api/admin/email-users requires admin token and supports query filter'
   assert.equal(filtered.status, 200);
   assert.equal(filtered.body.data.total, 1);
   assert.equal(filtered.body.data.users[0].email, 'alpha@example.com');
+});
+
+test('redeem links existing wallet to email user after email login', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const firstRedeem = await request(app)
+    .post('/api/redeem')
+    .send({ code: 'TEST-CODE-100' });
+  assert.equal(firstRedeem.status, 200);
+  const walletToken = firstRedeem.body.data.user_token;
+  assert.equal(firstRedeem.body.data.available_credits, 100);
+
+  const codeRes = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'charlie@example.com' });
+  assert.equal(codeRes.status, 200);
+
+  const verified = await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'charlie@example.com', code: codeRes.body.data.dev_code });
+  assert.equal(verified.status, 200);
+  const authToken = verified.body.data.auth_token;
+
+  const batch = await request(app)
+    .post('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'link-test', count: 1, credits_per_code: 50, prefix: 'LNK' });
+  assert.equal(batch.status, 201);
+  const secondCode = batch.body.data.codes[0];
+
+  const secondRedeem = await request(app)
+    .post('/api/redeem')
+    .set('x-user-token', walletToken)
+    .set('x-auth-token', authToken)
+    .send({ code: secondCode });
+  assert.equal(secondRedeem.status, 200);
+  assert.equal(secondRedeem.body.data.available_credits, 150);
+
+  const users = await request(app)
+    .get('/api/admin/email-users')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(users.status, 200);
+  const charlie = users.body.data.users.find((item) => item.email === 'charlie@example.com');
+  assert.ok(charlie);
+  assert.equal(charlie.wallet.linked, true);
+  assert.equal(charlie.wallet.available_credits, 150);
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {
