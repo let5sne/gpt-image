@@ -37,6 +37,7 @@ OPENROUTER_IMAGE_API_MODEL=openai/gpt-image-2
 - 输入与成本保护：限制 prompt 长度、图片尺寸白名单、像素上限、单次图片数量上限。
 - 统一错误响应：API 返回统一结构，便于前端和日志排查。
 - 请求观测：每个请求带 `x-request-id`，服务端日志记录关键状态。
+- 图片存储可切换：默认本地 `/storage`，生产可配置 S3-compatible 对象存储。
 - CI 基线：已新增 GitHub Actions，在 push/PR 时运行 `npm test`。
 
 ## 目录
@@ -191,6 +192,30 @@ npm run codes:create -- --count 20 --credits 100 --name launch-batch --prefix IM
 ```
 
 命令会输出明文兑换码 CSV；明文只展示一次，服务端文件只保存 hash。
+
+## 图片存储
+
+默认配置使用本地文件：
+
+```bash
+IMAGE_STORAGE_PROVIDER=local
+```
+
+上线时建议切到 S3-compatible 对象存储，例如 Cloudflare R2、AWS S3、OSS 的 S3 API：
+
+```bash
+IMAGE_STORAGE_PROVIDER=s3
+IMAGE_STORAGE_PUBLIC_BASE_URL=https://cdn.example.com/images
+IMAGE_STORAGE_UPLOAD_TIMEOUT_MS=30000
+S3_ENDPOINT=https://account-id.r2.cloudflarestorage.com
+S3_BUCKET=gpt-image
+S3_REGION=auto
+S3_ACCESS_KEY_ID=xxx
+S3_SECRET_ACCESS_KEY=xxx
+S3_FORCE_PATH_STYLE=true
+```
+
+`IMAGE_STORAGE_PUBLIC_BASE_URL` 必须是最终可公开访问图片的 CDN 或桶公开域名。`IMAGE_STORAGE_PREFIX` 可选，用于把对象写入桶内子目录。
 
 ## 后续扩展点（已留好接入位）
 

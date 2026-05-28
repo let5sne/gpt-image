@@ -77,6 +77,16 @@ function setBaseEnv() {
   delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_MEDIUM;
   delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_AUTO;
   delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH;
+  delete process.env.IMAGE_STORAGE_PROVIDER;
+  delete process.env.IMAGE_STORAGE_PUBLIC_BASE_URL;
+  delete process.env.IMAGE_STORAGE_PREFIX;
+  delete process.env.IMAGE_STORAGE_UPLOAD_TIMEOUT_MS;
+  delete process.env.S3_ENDPOINT;
+  delete process.env.S3_BUCKET;
+  delete process.env.S3_REGION;
+  delete process.env.S3_ACCESS_KEY_ID;
+  delete process.env.S3_SECRET_ACCESS_KEY;
+  delete process.env.S3_FORCE_PATH_STYLE;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -491,6 +501,132 @@ test('POST /api/generate settles credits when generation succeeds', async () => 
     assert.equal(wallet.body.data.available_credits, 97);
     assert.equal(wallet.body.data.reserved_credits, 0);
     assert.ok(wallet.body.data.recent_ledger.some((item) => item.type === 'settle'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('POST /api/generate uploads generated image to S3-compatible storage when configured', async () => {
+  setBaseEnv();
+  process.env.IMAGE_STORAGE_PROVIDER = 's3';
+  process.env.IMAGE_STORAGE_PUBLIC_BASE_URL = 'https://cdn.example.com/images';
+  process.env.S3_ENDPOINT = 'https://r2.example.com';
+  process.env.S3_BUCKET = 'image-bucket';
+  process.env.S3_REGION = 'auto';
+  process.env.S3_ACCESS_KEY_ID = 'access-key';
+  process.env.S3_SECRET_ACCESS_KEY = 'secret-key';
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options = {}) => {
+    const urlText = String(url);
+    calls.push({ url: urlText, options });
+
+    if (urlText === 'https://example.com/v1/images/generations') {
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ b64_json: Buffer.from('s3-image').toString('base64') }] };
+        },
+      };
+    }
+
+    if (urlText.startsWith('https://r2.example.com/image-bucket/')) {
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return '';
+        },
+      };
+    }
+
+    throw new Error(`unexpected fetch ${urlText}`);
+  };
+
+  try {
+    const app = loadFreshApp();
+    const generated = await request(app)
+      .post('/api/generate')
+      .send({ prompt: 'a valid prompt', size: '1024x1024' });
+
+    assert.equal(generated.status, 200);
+    assert.equal(generated.body.success, true);
+    assert.match(generated.body.data.images[0].url, /^https:\/\/cdn\.example\.com\/images\//);
+    assert.equal(generated.body.data.images[0].local_url, null);
+
+    const uploadCall = calls.find((call) => call.url.startsWith('https://r2.example.com/image-bucket/'));
+    assert.ok(uploadCall);
+    assert.equal(uploadCall.options.method, 'PUT');
+    assert.equal(uploadCall.options.headers['Content-Type'], 'image/png');
+    assert.match(uploadCall.options.headers.Authorization, /^AWS4-HMAC-SHA256 /);
+    assert.deepEqual(Buffer.from(uploadCall.options.body), Buffer.from('s3-image'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('POST /api/generate releases credits when S3 upload fails for b64-only image', async () => {
+  setBaseEnv();
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  process.env.IMAGE_STORAGE_PROVIDER = 's3';
+  process.env.IMAGE_STORAGE_PUBLIC_BASE_URL = 'https://cdn.example.com/images';
+  process.env.S3_ENDPOINT = 'https://r2.example.com';
+  process.env.S3_BUCKET = 'image-bucket';
+  process.env.S3_REGION = 'auto';
+  process.env.S3_ACCESS_KEY_ID = 'access-key';
+  process.env.S3_SECRET_ACCESS_KEY = 'secret-key';
+
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const urlText = String(url);
+
+    if (urlText === 'https://example.com/v1/images/generations') {
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ b64_json: Buffer.from('s3-image').toString('base64') }] };
+        },
+      };
+    }
+
+    if (urlText.startsWith('https://r2.example.com/image-bucket/')) {
+      return {
+        ok: false,
+        status: 500,
+        async text() {
+          return 'upload failed';
+        },
+      };
+    }
+
+    throw new Error(`unexpected fetch ${urlText}`);
+  };
+
+  try {
+    const app = loadFreshApp();
+    const redeemed = await request(app)
+      .post('/api/redeem')
+      .send({ code: 'TEST-CODE-100' });
+    const userToken = redeemed.body.data.user_token;
+
+    const generated = await request(app)
+      .post('/api/generate')
+      .set('x-user-token', userToken)
+      .send({ prompt: 'a valid prompt', size: '1024x1024', quality: 'low' });
+
+    assert.equal(generated.status, 500);
+    assert.equal(generated.body.success, false);
+
+    const wallet = await request(app)
+      .get('/api/wallet')
+      .set('x-user-token', userToken);
+
+    assert.equal(wallet.body.data.available_credits, 100);
+    assert.equal(wallet.body.data.reserved_credits, 0);
+    assert.ok(wallet.body.data.recent_ledger.some((item) => item.type === 'release'));
   } finally {
     global.fetch = originalFetch;
   }

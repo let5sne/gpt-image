@@ -10,6 +10,10 @@ const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const ENABLE_LOCAL_STORAGE = !IS_VERCEL;
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, 'storage');
+const IMAGE_STORAGE_PROVIDER = (process.env.IMAGE_STORAGE_PROVIDER || (ENABLE_LOCAL_STORAGE ? 'local' : 'none')).trim().toLowerCase();
+const IMAGE_STORAGE_PUBLIC_BASE_URL = (process.env.IMAGE_STORAGE_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+const IMAGE_STORAGE_PREFIX = (process.env.IMAGE_STORAGE_PREFIX || '').trim().replace(/^\/+|\/+$/g, '');
+const IMAGE_STORAGE_UPLOAD_TIMEOUT_MS = Number(process.env.IMAGE_STORAGE_UPLOAD_TIMEOUT_MS || 30000);
 const AUTH_TOKEN = process.env.APP_ACCESS_TOKEN || '';
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === 'true' || IS_VERCEL;
 const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || 'openai').trim().toLowerCase();
@@ -104,8 +108,23 @@ function resolveProviderConfig(provider) {
   };
 }
 
+function getImageStorageMissingEnv(provider) {
+  if (provider === 'none' || provider === 'local') return [];
+  if (provider !== 's3') return ['IMAGE_STORAGE_PROVIDER'];
+
+  const required = [
+    'IMAGE_STORAGE_PUBLIC_BASE_URL',
+    'S3_ENDPOINT',
+    'S3_BUCKET',
+    'S3_REGION',
+    'S3_ACCESS_KEY_ID',
+    'S3_SECRET_ACCESS_KEY',
+  ];
+  return required.filter((name) => !process.env[name] || process.env[name].trim() === '');
+}
+
 const PROVIDER_CONFIG = resolveProviderConfig(IMAGE_PROVIDER);
-const missingEnv = [...PROVIDER_CONFIG.missingEnv];
+const missingEnv = [...PROVIDER_CONFIG.missingEnv, ...getImageStorageMissingEnv(IMAGE_STORAGE_PROVIDER)];
 if (AUTH_REQUIRED && !process.env.APP_ACCESS_TOKEN) {
   missingEnv.push('APP_ACCESS_TOKEN');
 }
@@ -239,6 +258,162 @@ function deletePersistedJob(jobId) {
 
 function isTerminalJobStatus(status) {
   return ['succeeded', 'failed', 'canceled', 'timed_out'].includes(status);
+}
+
+function normalizeOutputExtension(outputFormat) {
+  if (outputFormat === 'jpeg') return 'jpg';
+  return outputFormat || 'png';
+}
+
+function getImageContentType(ext) {
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  return 'image/png';
+}
+
+function encodeObjectKey(objectKey) {
+  return objectKey.split('/').map((part) => encodeURIComponent(part)).join('/');
+}
+
+function buildImageObjectKey(filename) {
+  return IMAGE_STORAGE_PREFIX ? `${IMAGE_STORAGE_PREFIX}/${filename}` : filename;
+}
+
+function buildPublicImageUrl(objectKey) {
+  if (!IMAGE_STORAGE_PUBLIC_BASE_URL) {
+    throw new Error('IMAGE_STORAGE_PUBLIC_BASE_URL is required for s3 provider');
+  }
+  return `${IMAGE_STORAGE_PUBLIC_BASE_URL}/${encodeObjectKey(objectKey)}`;
+}
+
+function hmac(key, value, encoding) {
+  return crypto.createHmac('sha256', key).update(value).digest(encoding);
+}
+
+function sha256Hex(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function getSigningKey(secretKey, dateStamp, region) {
+  const dateKey = hmac(`AWS4${secretKey}`, dateStamp);
+  const regionKey = hmac(dateKey, region);
+  const serviceKey = hmac(regionKey, 's3');
+  return hmac(serviceKey, 'aws4_request');
+}
+
+function buildS3UploadUrl(objectKey) {
+  const endpoint = (process.env.S3_ENDPOINT || '').replace(/\/+$/, '');
+  const bucket = process.env.S3_BUCKET;
+  const forcePathStyle = process.env.S3_FORCE_PATH_STYLE !== 'false';
+  const encodedKey = encodeObjectKey(objectKey);
+
+  if (forcePathStyle) {
+    return new URL(`${endpoint}/${encodeURIComponent(bucket)}/${encodedKey}`);
+  }
+
+  const endpointUrl = new URL(endpoint);
+  endpointUrl.hostname = `${bucket}.${endpointUrl.hostname}`;
+  endpointUrl.pathname = `/${encodedKey}`;
+  return endpointUrl;
+}
+
+function createS3Headers({ method, url, body, contentType }) {
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const region = process.env.S3_REGION || 'auto';
+  const accessKey = process.env.S3_ACCESS_KEY_ID;
+  const secretKey = process.env.S3_SECRET_ACCESS_KEY;
+  const payloadHash = sha256Hex(body);
+  const headers = {
+    'Content-Type': contentType,
+    Host: url.host,
+    'x-amz-content-sha256': payloadHash,
+    'x-amz-date': amzDate,
+  };
+  const canonicalHeaderEntries = Object.entries(headers)
+    .map(([name, value]) => [name.toLowerCase(), String(value).trim()])
+    .sort(([left], [right]) => left.localeCompare(right));
+  const canonicalHeaders = canonicalHeaderEntries
+    .map(([name, value]) => `${name}:${value}\n`)
+    .join('');
+  const signedHeaders = canonicalHeaderEntries.map(([name]) => name).join(';');
+  const canonicalRequest = [
+    method,
+    url.pathname,
+    url.searchParams.toString(),
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join('\n');
+  const signature = hmac(getSigningKey(secretKey, dateStamp, region), stringToSign, 'hex');
+
+  headers.Authorization = `AWS4-HMAC-SHA256 Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  return headers;
+}
+
+async function storeImageBuffer(buffer, filename, contentType) {
+  if (IMAGE_STORAGE_PROVIDER === 'local') {
+    const localPath = path.join(IMAGE_DIR, filename);
+    const localUrl = `/storage/${filename}`;
+    fs.writeFileSync(localPath, buffer);
+    return { url: localUrl, localUrl };
+  }
+
+  if (IMAGE_STORAGE_PROVIDER === 's3') {
+    const objectKey = buildImageObjectKey(filename);
+    const uploadUrl = buildS3UploadUrl(objectKey);
+    const method = 'PUT';
+    const headers = createS3Headers({ method, url: uploadUrl, body: buffer, contentType });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_STORAGE_UPLOAD_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(uploadUrl, { method, headers, body: buffer, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) {
+      const body = await response.text();
+      log('error', 's3_upload_failed', {
+        status: response.status,
+        body_hash: sha256Hex(body).slice(0, 12),
+      });
+      throw new Error(`s3 upload failed with status ${response.status}`);
+    }
+    return { url: buildPublicImageUrl(objectKey), localUrl: null };
+  }
+
+  return { url: null, localUrl: null };
+}
+
+async function persistGeneratedImageBuffer(buffer, context, sourceUrl = null) {
+  const id = crypto.randomUUID();
+  const ext = normalizeOutputExtension(context.outputFormat);
+  const filename = `${id}.${ext}`;
+  const contentType = getImageContentType(ext);
+  const stored = await storeImageBuffer(buffer, filename, contentType);
+
+  return {
+    id,
+    url: stored.url || sourceUrl,
+    localUrl: stored.localUrl,
+    sourceUrl,
+  };
+}
+
+async function downloadImageBuffer(remoteUrl, headers = {}) {
+  const imgRes = await fetch(remoteUrl, { headers });
+  if (!imgRes.ok) throw new Error(`download ${imgRes.status}`);
+  const arrayBuf = await imgRes.arrayBuffer();
+  return Buffer.from(arrayBuf);
 }
 
 function emptyCreditsState() {
@@ -552,33 +727,23 @@ async function saveImagesFromUrls(urls, context) {
   const images = [];
 
   for (const remoteUrl of urls) {
-    let localPath = null;
-    let localUrl = null;
     let id = null;
+    let storedUrl = remoteUrl;
+    let localUrl = null;
 
-    if (ENABLE_LOCAL_STORAGE) {
-      id = crypto.randomUUID();
-      const ext = context.outputFormat === 'jpeg' ? 'jpg' : (context.outputFormat || 'png');
-      const filename = `${id}.${ext}`;
-      localPath = path.join(IMAGE_DIR, filename);
-      localUrl = `/storage/${filename}`;
-
-      try {
-        const headers = shouldAuthorizeReplicateOutput(remoteUrl)
-          ? { Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}` }
-          : {};
-        const imgRes = await fetch(remoteUrl, {
-          headers,
-        });
-        if (!imgRes.ok) throw new Error(`download ${imgRes.status}`);
-        const arrayBuf = await imgRes.arrayBuffer();
-        fs.writeFileSync(localPath, Buffer.from(arrayBuf));
-      } catch (saveErr) {
-        console.error('[save error]', saveErr.message);
-      }
+    try {
+      const headers = shouldAuthorizeReplicateOutput(remoteUrl)
+        ? { Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}` }
+        : {};
+      const buffer = await downloadImageBuffer(remoteUrl, headers);
+      const stored = await persistGeneratedImageBuffer(buffer, context, remoteUrl);
+      id = stored.id;
+      storedUrl = stored.url || remoteUrl;
+      localUrl = stored.localUrl;
+    } catch (saveErr) {
+      console.error('[save error]', saveErr.message);
     }
 
-    const saved = ENABLE_LOCAL_STORAGE && localPath && fs.existsSync(localPath);
     if (ENABLE_LOCAL_STORAGE) {
       const record = {
         id,
@@ -586,17 +751,18 @@ async function saveImagesFromUrls(urls, context) {
         size: context.size,
         model: context.model,
         took_ms: context.tookMs,
-        local_url: saved ? localUrl : null,
-        remote_url: remoteUrl,
+        local_url: localUrl,
+        remote_url: storedUrl,
+        source_url: remoteUrl,
         created_at: new Date().toISOString(),
       };
       meta.push(record);
     }
 
     images.push({
-      url: saved ? localUrl : remoteUrl,
+      url: storedUrl,
       b64_json: null,
-      local_url: ENABLE_LOCAL_STORAGE && saved ? localUrl : null,
+      local_url: localUrl,
       prompt: context.prompt,
     });
   }
@@ -890,6 +1056,7 @@ app.get('/api/health', (_req, res) => {
     status: missingEnv.length > 0 ? 'degraded' : 'ok',
     mode: ENABLE_LOCAL_STORAGE ? 'local-storage' : 'serverless-proxy',
     provider: IMAGE_PROVIDER,
+    image_storage_provider: IMAGE_STORAGE_PROVIDER,
     credits_enabled: CREDITS_ENABLED,
     has_required_env: missingEnv.length === 0,
     has_bypass_secret: IMAGE_API_BYPASS_SECRET.length > 0,
@@ -1150,7 +1317,7 @@ app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => 
           prompt: normalizedPrompt,
           size,
           n,
-          response_format: ENABLE_LOCAL_STORAGE ? 'b64_json' : 'url',
+          response_format: IMAGE_STORAGE_PROVIDER === 'none' ? 'url' : 'b64_json',
         }),
       }
     );
@@ -1180,35 +1347,41 @@ app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => 
     const images = [];
 
     for (const d of (json.data || [])) {
-      let localPath = null;
+      let storedUrl = d.url || null;
       let localUrl = null;
       let id = null;
 
-      if (ENABLE_LOCAL_STORAGE) {
-        id = crypto.randomUUID();
-        const filename = `${id}.png`;
-        localPath = path.join(IMAGE_DIR, filename);
-        localUrl = `/storage/${filename}`;
-
-        // 保存图片到本地
+      if (IMAGE_STORAGE_PROVIDER !== 'none') {
         try {
+          let buffer = null;
           if (d.b64_json) {
-            fs.writeFileSync(localPath, Buffer.from(d.b64_json, 'base64'));
+            buffer = Buffer.from(d.b64_json, 'base64');
           } else if (d.url) {
-            // 上游未返回 b64，降级为 URL 下载
-            const imgRes = await fetch(d.url);
-            if (!imgRes.ok) throw new Error(`download ${imgRes.status}`);
-            const arrayBuf = await imgRes.arrayBuffer();
-            fs.writeFileSync(localPath, Buffer.from(arrayBuf));
-          } else {
+            buffer = await downloadImageBuffer(d.url);
+          }
+
+          if (!buffer) {
             throw new Error('upstream returned no image data');
           }
+
+          const stored = await persistGeneratedImageBuffer(buffer, {
+            prompt: normalizedPrompt,
+            size,
+            model,
+            outputFormat: 'png',
+            tookMs: took_ms,
+          }, d.url || null);
+          id = stored.id;
+          storedUrl = stored.url;
+          localUrl = stored.localUrl;
         } catch (saveErr) {
           console.error('[save error]', saveErr.message);
+          if (IMAGE_STORAGE_PROVIDER === 's3' && !d.url) {
+            throw saveErr;
+          }
         }
       }
 
-      const saved = ENABLE_LOCAL_STORAGE && localPath && fs.existsSync(localPath);
       if (ENABLE_LOCAL_STORAGE) {
         const record = {
           id,
@@ -1216,17 +1389,18 @@ app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => 
           size,
           model,
           took_ms,
-          local_url: saved ? localUrl : null,
-          remote_url: d.url || null,
+          local_url: localUrl,
+          remote_url: storedUrl,
+          source_url: d.url || null,
           created_at: new Date().toISOString(),
         };
         meta.push(record);
       }
 
       images.push({
-        url: saved ? localUrl : (d.url || null),
+        url: storedUrl,
         b64_json: null,
-        local_url: ENABLE_LOCAL_STORAGE && saved ? localUrl : null,
+        local_url: localUrl,
         prompt: normalizedPrompt,
       });
     }
