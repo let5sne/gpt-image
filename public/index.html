@@ -774,9 +774,9 @@ h2 {
   <div class="helper-row">
     <input id="emailInput" type="email" placeholder="邮箱登录（user@example.com）" />
     <input id="emailCodeInput" type="text" placeholder="验证码" maxlength="6" inputmode="numeric" />
-    <button type="button" onclick="sendEmailCode()">发码</button>
-    <button type="button" onclick="verifyEmailCode()">登录</button>
-    <button type="button" onclick="logoutEmailAuth()">登出</button>
+    <button id="sendCodeBtn" type="button" onclick="sendEmailCode()">发码</button>
+    <button id="verifyCodeBtn" type="button" onclick="verifyEmailCode()">登录</button>
+    <button id="logoutBtn" type="button" onclick="logoutEmailAuth()">登出</button>
   </div>
   <p class="helper-note" id="authStatus">邮箱登录未启用或尚未登录。</p>
   <div class="helper-row">
@@ -1025,7 +1025,62 @@ function getAuthHeaders() {
   return headers;
 }
 
+let sendCodeInFlight = false;
+let verifyCodeInFlight = false;
+let logoutInFlight = false;
+let sendCodeCooldownSeconds = 0;
+let sendCodeCooldownTimer = null;
+
+function setButtonState(buttonId, disabled, text) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+  if (!btn.dataset.defaultText) {
+    btn.dataset.defaultText = btn.textContent || '';
+  }
+  btn.disabled = disabled;
+  btn.textContent = text != null ? text : btn.dataset.defaultText;
+}
+
+function parseCooldownSeconds(message) {
+  const m = String(message || '').match(/(\d+)\s*(?:秒|s)/i);
+  if (!m) return 0;
+  const value = Number(m[1]);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function startSendCodeCooldown(seconds) {
+  const total = Math.max(0, Math.min(600, Number(seconds) || 0));
+  if (sendCodeCooldownTimer) {
+    clearInterval(sendCodeCooldownTimer);
+    sendCodeCooldownTimer = null;
+  }
+  sendCodeCooldownSeconds = total;
+  updateAuthActionButtons();
+  if (sendCodeCooldownSeconds <= 0) return;
+
+  sendCodeCooldownTimer = setInterval(() => {
+    sendCodeCooldownSeconds = Math.max(0, sendCodeCooldownSeconds - 1);
+    updateAuthActionButtons();
+    if (sendCodeCooldownSeconds <= 0 && sendCodeCooldownTimer) {
+      clearInterval(sendCodeCooldownTimer);
+      sendCodeCooldownTimer = null;
+    }
+  }, 1000);
+}
+
+function updateAuthActionButtons() {
+  const sendText = sendCodeInFlight
+    ? '发送中...'
+    : (sendCodeCooldownSeconds > 0 ? `${sendCodeCooldownSeconds}s 后重发` : '发码');
+  setButtonState('sendCodeBtn', sendCodeInFlight || sendCodeCooldownSeconds > 0, sendText);
+  setButtonState('verifyCodeBtn', verifyCodeInFlight, verifyCodeInFlight ? '登录中...' : '登录');
+  setButtonState('logoutBtn', logoutInFlight, logoutInFlight ? '登出中...' : '登出');
+}
+
 async function sendEmailCode() {
+  if (sendCodeInFlight || sendCodeCooldownSeconds > 0) {
+    return;
+  }
   const emailEl = document.getElementById('emailInput');
   const email = emailEl ? emailEl.value.trim() : '';
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1040,6 +1095,8 @@ async function sendEmailCode() {
     return;
   }
 
+  sendCodeInFlight = true;
+  updateAuthActionButtons();
   try {
     const api = await requestWithRetry('/api/auth/email/send-code', {
       method: 'POST',
@@ -1054,13 +1111,24 @@ async function sendEmailCode() {
     } else {
       setAuthStatus('验证码已发送，请检查邮箱。');
     }
+    startSendCodeCooldown(60);
   } catch (e) {
     const rid = e.requestId ? `（request_id: ${e.requestId}）` : '';
     setAuthStatus(`${e.message}${rid}`);
+    const cooldown = parseCooldownSeconds(e.message);
+    if (cooldown > 0) {
+      startSendCodeCooldown(cooldown);
+    }
+  } finally {
+    sendCodeInFlight = false;
+    updateAuthActionButtons();
   }
 }
 
 async function verifyEmailCode() {
+  if (verifyCodeInFlight) {
+    return;
+  }
   const emailEl = document.getElementById('emailInput');
   const codeEl = document.getElementById('emailCodeInput');
   const email = emailEl ? emailEl.value.trim() : '';
@@ -1070,6 +1138,8 @@ async function verifyEmailCode() {
     return;
   }
 
+  verifyCodeInFlight = true;
+  updateAuthActionButtons();
   try {
     const api = await requestWithRetry('/api/auth/email/verify-code', {
       method: 'POST',
@@ -1087,10 +1157,18 @@ async function verifyEmailCode() {
   } catch (e) {
     const rid = e.requestId ? `（request_id: ${e.requestId}）` : '';
     setAuthStatus(`${e.message}${rid}`);
+  } finally {
+    verifyCodeInFlight = false;
+    updateAuthActionButtons();
   }
 }
 
 async function logoutEmailAuth() {
+  if (logoutInFlight) {
+    return;
+  }
+  logoutInFlight = true;
+  updateAuthActionButtons();
   try {
     await requestWithRetry('/api/auth/logout', {
       method: 'POST',
@@ -1101,6 +1179,8 @@ async function logoutEmailAuth() {
   } finally {
     persistEmailAuthToken('');
     setAuthStatus('已登出。');
+    logoutInFlight = false;
+    updateAuthActionButtons();
   }
 }
 
@@ -1645,6 +1725,7 @@ if (cachedToken) {
 updateEstimatedCost();
 loadWallet();
 loadGallery();
+updateAuthActionButtons();
 loadEmailAuthMe();
 </script>
 </body>
