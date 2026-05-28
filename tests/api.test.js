@@ -92,6 +92,16 @@ function setBaseEnv() {
   delete process.env.ADMIN_BATCH_MAX_CODES;
   delete process.env.ADMIN_BATCH_MAX_CREDITS_PER_CODE;
   delete process.env.ADMIN_AUDIT_LOG_FILE;
+  delete process.env.EMAIL_AUTH_ENABLED;
+  delete process.env.EMAIL_AUTH_FILE;
+  delete process.env.EMAIL_AUTH_PEPPER;
+  delete process.env.EMAIL_CODE_LENGTH;
+  delete process.env.EMAIL_CODE_TTL_MS;
+  delete process.env.EMAIL_CODE_RESEND_COOLDOWN_MS;
+  delete process.env.EMAIL_CODE_MAX_ATTEMPTS;
+  delete process.env.EMAIL_SESSION_TTL_MS;
+  delete process.env.EMAIL_CODE_DEV_MODE;
+  delete process.env.EMAIL_AUTH_COOKIE_NAME;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -861,6 +871,71 @@ test('admin actions append audit logs for grant and redemption operations', asyn
   assert.ok(actions.includes('admin_credits_grant'));
   assert.ok(actions.includes('admin_redemption_batch_create'));
   assert.ok(actions.includes('admin_redemption_code_revoke'));
+});
+
+test('email auth flow supports send-code verify me and logout', async () => {
+  setBaseEnv();
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const app = loadFreshApp();
+
+  const sendCode = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'user@example.com' });
+  assert.equal(sendCode.status, 200);
+  assert.equal(sendCode.body.success, true);
+  assert.equal(typeof sendCode.body.data.dev_code, 'string');
+
+  const wrongCode = await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'user@example.com', code: '000000' });
+  assert.equal(wrongCode.status, 401);
+
+  const verified = await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'user@example.com', code: sendCode.body.data.dev_code });
+  assert.equal(verified.status, 200);
+  assert.equal(verified.body.success, true);
+  assert.equal(verified.body.data.user.email, 'user@example.com');
+  assert.equal(typeof verified.body.data.auth_token, 'string');
+  assert.ok(String(verified.headers['set-cookie'] || '').includes('ims_auth='));
+
+  const me = await request(app)
+    .get('/api/auth/me')
+    .set('x-auth-token', verified.body.data.auth_token);
+  assert.equal(me.status, 200);
+  assert.equal(me.body.data.user.email, 'user@example.com');
+
+  const logout = await request(app)
+    .post('/api/auth/logout')
+    .set('x-auth-token', verified.body.data.auth_token);
+  assert.equal(logout.status, 200);
+
+  const meAfterLogout = await request(app)
+    .get('/api/auth/me')
+    .set('x-auth-token', verified.body.data.auth_token);
+  assert.equal(meAfterLogout.status, 401);
+});
+
+test('email auth send-code enforces cooldown', async () => {
+  setBaseEnv();
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  process.env.EMAIL_CODE_RESEND_COOLDOWN_MS = '60000';
+  const app = loadFreshApp();
+
+  const first = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'cooldown@example.com' });
+  assert.equal(first.status, 200);
+
+  const second = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'cooldown@example.com' });
+  assert.equal(second.status, 429);
+  assert.equal(second.body.error.code, 'code_send_cooldown');
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {

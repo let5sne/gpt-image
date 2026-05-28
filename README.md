@@ -165,6 +165,44 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/metrics
 该接口返回进程 uptime、请求总量、错误总量、按状态码统计、按路径统计和错误码统计。
 管理员写操作（补偿、发码、撤销）会追加写入 `ADMIN_AUDIT_LOG_FILE`（JSONL），用于审计追踪。
 
+## 邮箱用户系统（验证码登录）
+
+启用邮箱登录（无密码）：
+
+```bash
+EMAIL_AUTH_ENABLED=true
+EMAIL_AUTH_FILE=./storage/email-auth.json
+EMAIL_AUTH_PEPPER=replace-with-a-strong-random-pepper
+```
+
+发送验证码：
+
+```bash
+curl -X POST http://localhost:3000/api/auth/email/send-code \
+  -H "content-type: application/json" \
+  -d '{"email":"user@example.com"}'
+```
+
+验证码校验并登录（成功后会设置 HttpOnly Cookie，同时返回 `auth_token` 便于 API 调试）：
+
+```bash
+curl -X POST http://localhost:3000/api/auth/email/verify-code \
+  -H "content-type: application/json" \
+  -d '{"email":"user@example.com","code":"123456"}'
+```
+
+查询当前登录用户：
+
+```bash
+curl -H "x-auth-token: <auth_token>" http://localhost:3000/api/auth/me
+```
+
+登出：
+
+```bash
+curl -X POST -H "x-auth-token: <auth_token>" http://localhost:3000/api/auth/logout
+```
+
 ### 手动补偿 credits
 
 配置单次补偿上限：

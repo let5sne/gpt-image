@@ -20,6 +20,7 @@ const AUTH_REQUIRED = process.env.AUTH_REQUIRED === 'true' || IS_VERCEL;
 const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || 'openai').trim().toLowerCase();
 const DATABASE_URL = (process.env.DATABASE_URL || '').trim();
 const DB_DUAL_WRITE = process.env.DB_DUAL_WRITE === 'true';
+const EMAIL_AUTH_ENABLED = process.env.EMAIL_AUTH_ENABLED === 'true';
 
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
   'openai',
@@ -167,6 +168,15 @@ const CREDITS_ENABLED = process.env.CREDITS_ENABLED === 'true';
 const CREDIT_CODE_PEPPER = process.env.CREDIT_CODE_PEPPER || 'change-me';
 const CREDITS_FILE = process.env.CREDITS_FILE || path.join(STORAGE_DIR, 'credits.json');
 const ADMIN_AUDIT_LOG_FILE = process.env.ADMIN_AUDIT_LOG_FILE || path.join(STORAGE_DIR, 'admin-audit.log');
+const EMAIL_AUTH_FILE = process.env.EMAIL_AUTH_FILE || path.join(STORAGE_DIR, 'email-auth.json');
+const EMAIL_AUTH_PEPPER = process.env.EMAIL_AUTH_PEPPER || CREDIT_CODE_PEPPER;
+const EMAIL_CODE_LENGTH = Number(process.env.EMAIL_CODE_LENGTH || 6);
+const EMAIL_CODE_TTL_MS = Number(process.env.EMAIL_CODE_TTL_MS || 10 * 60 * 1000);
+const EMAIL_CODE_RESEND_COOLDOWN_MS = Number(process.env.EMAIL_CODE_RESEND_COOLDOWN_MS || 60 * 1000);
+const EMAIL_CODE_MAX_ATTEMPTS = Number(process.env.EMAIL_CODE_MAX_ATTEMPTS || 5);
+const EMAIL_SESSION_TTL_MS = Number(process.env.EMAIL_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+const EMAIL_CODE_DEV_MODE = process.env.EMAIL_CODE_DEV_MODE !== 'false';
+const EMAIL_AUTH_COOKIE_NAME = process.env.EMAIL_AUTH_COOKIE_NAME || 'ims_auth';
 
 if (CREDITS_ENABLED && (!process.env.CREDIT_CODE_PEPPER || CREDIT_CODE_PEPPER === 'change-me')) {
   throw new Error(
@@ -453,6 +463,14 @@ function emptyCreditsState() {
   };
 }
 
+function emptyEmailAuthState() {
+  return {
+    users: [],
+    verification_codes: [],
+    sessions: [],
+  };
+}
+
 function ensureCreditsFile() {
   if (!CREDITS_ENABLED) return;
   fs.mkdirSync(path.dirname(CREDITS_FILE), { recursive: true });
@@ -484,10 +502,58 @@ if (CREDITS_ENABLED) {
   ensureCreditsFile();
 }
 
+let inMemoryEmailAuthState = emptyEmailAuthState();
+
+function ensureEmailAuthFile() {
+  if (!EMAIL_AUTH_ENABLED || !ENABLE_LOCAL_STORAGE) return;
+  fs.mkdirSync(path.dirname(EMAIL_AUTH_FILE), { recursive: true });
+  if (!fs.existsSync(EMAIL_AUTH_FILE)) {
+    fs.writeFileSync(EMAIL_AUTH_FILE, JSON.stringify(emptyEmailAuthState(), null, 2), 'utf-8');
+  }
+}
+
+function readEmailAuthState() {
+  if (!EMAIL_AUTH_ENABLED) return emptyEmailAuthState();
+  if (!ENABLE_LOCAL_STORAGE) {
+    return JSON.parse(JSON.stringify(inMemoryEmailAuthState));
+  }
+
+  ensureEmailAuthFile();
+  try {
+    return { ...emptyEmailAuthState(), ...JSON.parse(fs.readFileSync(EMAIL_AUTH_FILE, 'utf-8')) };
+  } catch {
+    return emptyEmailAuthState();
+  }
+}
+
+function writeEmailAuthState(state) {
+  if (!EMAIL_AUTH_ENABLED) return;
+  if (!ENABLE_LOCAL_STORAGE) {
+    inMemoryEmailAuthState = JSON.parse(JSON.stringify(state));
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(EMAIL_AUTH_FILE), { recursive: true });
+  const tmp = `${EMAIL_AUTH_FILE}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+  fs.renameSync(tmp, EMAIL_AUTH_FILE);
+}
+
+if (EMAIL_AUTH_ENABLED) {
+  ensureEmailAuthFile();
+}
+
 let creditsMutex = Promise.resolve();
 function withCreditsLock(fn) {
   const next = creditsMutex.then(() => fn());
   creditsMutex = next.catch(() => {});
+  return next;
+}
+
+let emailAuthMutex = Promise.resolve();
+function withEmailAuthLock(fn) {
+  const next = emailAuthMutex.then(() => fn());
+  emailAuthMutex = next.catch(() => {});
   return next;
 }
 
@@ -727,6 +793,62 @@ function hashSecret(value) {
   return crypto.createHash('sha256').update(`${CREDIT_CODE_PEPPER}:${value}`).digest('hex');
 }
 
+function hashEmailAuthSecret(value) {
+  return crypto.createHash('sha256').update(`${EMAIL_AUTH_PEPPER}:${value}`).digest('hex');
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function generateEmailCode() {
+  const max = 10 ** EMAIL_CODE_LENGTH;
+  const value = crypto.randomInt(0, max);
+  return String(value).padStart(EMAIL_CODE_LENGTH, '0');
+}
+
+function parseCookies(req) {
+  const raw = req.headers.cookie;
+  if (!raw || typeof raw !== 'string') return {};
+  return raw.split(';').reduce((acc, item) => {
+    const idx = item.indexOf('=');
+    if (idx < 0) return acc;
+    const key = item.slice(0, idx).trim();
+    const value = decodeURIComponent(item.slice(idx + 1).trim());
+    acc[key] = value;
+    return acc;
+  }, {});
+}
+
+function readEmailAuthToken(req) {
+  const headerToken = req.headers['x-auth-token'];
+  if (headerToken && typeof headerToken === 'string') return headerToken.trim();
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  const cookies = parseCookies(req);
+  const cookieToken = cookies[EMAIL_AUTH_COOKIE_NAME];
+  return cookieToken ? cookieToken.trim() : '';
+}
+
+function setEmailAuthCookie(res, token) {
+  const maxAgeSeconds = Math.floor(EMAIL_SESSION_TTL_MS / 1000);
+  const cookie = `${EMAIL_AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${IS_VERCEL ? '; Secure' : ''}`;
+  res.setHeader('Set-Cookie', cookie);
+}
+
+function clearEmailAuthCookie(res) {
+  const cookie = `${EMAIL_AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${IS_VERCEL ? '; Secure' : ''}`;
+  res.setHeader('Set-Cookie', cookie);
+}
+
 function createPublicToken() {
   return `usr_${crypto.randomBytes(24).toString('base64url')}`;
 }
@@ -759,6 +881,45 @@ function serializeAdminRedemptionCode(item) {
     expires_at: item.expires_at || null,
     created_at: item.created_at,
   };
+}
+
+function findEmailUserByEmail(state, email) {
+  return (state.users || []).find((user) => user.email === email) || null;
+}
+
+function serializeEmailUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    status: user.status || 'active',
+    email_verified_at: user.email_verified_at || null,
+    last_login_at: user.last_login_at || null,
+  };
+}
+
+function cleanupEmailAuthState(state) {
+  const now = Date.now();
+  state.verification_codes = (state.verification_codes || []).filter((item) => {
+    if (item.used_at) return false;
+    if (!item.expires_at) return false;
+    return Date.parse(item.expires_at) > now;
+  });
+  state.sessions = (state.sessions || []).filter((item) => {
+    if (!item.expires_at) return false;
+    return Date.parse(item.expires_at) > now;
+  });
+}
+
+function getEmailAuthSession(state, token) {
+  if (!token) return null;
+  const tokenHash = hashEmailAuthSecret(token);
+  const now = Date.now();
+  const session = (state.sessions || []).find((item) => item.token_hash === tokenHash) || null;
+  if (!session) return null;
+  if (!session.expires_at || Date.parse(session.expires_at) <= now) return null;
+  const user = (state.users || []).find((item) => item.id === session.user_id) || null;
+  if (!user) return null;
+  return { session, user };
 }
 
 function getUserToken(req) {
@@ -1523,6 +1684,185 @@ app.get('/api/health', (_req, res) => {
     credits_enabled: CREDITS_ENABLED,
     has_required_env: missingEnv.length === 0,
     has_bypass_secret: IMAGE_API_BYPASS_SECRET.length > 0,
+  });
+});
+
+app.post('/api/auth/email/send-code', async (req, res) => {
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const email = normalizeEmail(req.body && req.body.email);
+  if (!isValidEmail(email)) {
+    return sendError(res, req, 400, 'invalid_email', 'email is invalid');
+  }
+
+  return withEmailAuthLock(() => {
+    const state = readEmailAuthState();
+    cleanupEmailAuthState(state);
+    const now = Date.now();
+    const recent = (state.verification_codes || [])
+      .filter((item) => item.email === email)
+      .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0))[0];
+
+    if (recent && Date.parse(recent.created_at || 0) + EMAIL_CODE_RESEND_COOLDOWN_MS > now) {
+      const retryAfterMs = Date.parse(recent.created_at || 0) + EMAIL_CODE_RESEND_COOLDOWN_MS - now;
+      return sendError(res, req, 429, 'code_send_cooldown', 'please wait before requesting another code', {
+        retry_after_ms: Math.max(0, retryAfterMs),
+      });
+    }
+
+    const code = generateEmailCode();
+    const nowIsoValue = nowIso();
+    state.verification_codes.push({
+      id: crypto.randomUUID(),
+      email,
+      code_hash: hashEmailAuthSecret(code),
+      attempts: 0,
+      created_at: nowIsoValue,
+      expires_at: new Date(now + EMAIL_CODE_TTL_MS).toISOString(),
+      used_at: null,
+    });
+    writeEmailAuthState(state);
+
+    log('info', 'email_auth_code_sent', {
+      request_id: req.requestId,
+      email_hash: sha256Hex(email).slice(0, 12),
+      ttl_ms: EMAIL_CODE_TTL_MS,
+    });
+
+    const data = {
+      sent: true,
+      email,
+      expires_in_sec: Math.floor(EMAIL_CODE_TTL_MS / 1000),
+    };
+    if (EMAIL_CODE_DEV_MODE) {
+      data.dev_code = code;
+    }
+    return sendOk(res, req, data);
+  });
+});
+
+app.post('/api/auth/email/verify-code', async (req, res) => {
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const email = normalizeEmail(req.body && req.body.email);
+  const code = String(req.body && req.body.code ? req.body.code : '').trim();
+  if (!isValidEmail(email)) {
+    return sendError(res, req, 400, 'invalid_email', 'email is invalid');
+  }
+  if (!/^\d+$/.test(code) || code.length !== EMAIL_CODE_LENGTH) {
+    return sendError(res, req, 400, 'invalid_code', `code must be ${EMAIL_CODE_LENGTH} digits`);
+  }
+
+  return withEmailAuthLock(() => {
+    const state = readEmailAuthState();
+    cleanupEmailAuthState(state);
+    const now = Date.now();
+    const candidate = (state.verification_codes || [])
+      .filter((item) => item.email === email && !item.used_at && Date.parse(item.expires_at || 0) > now)
+      .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0))[0];
+
+    if (!candidate) {
+      return sendError(res, req, 400, 'code_not_found', 'verification code not found or expired');
+    }
+
+    if ((candidate.attempts || 0) >= EMAIL_CODE_MAX_ATTEMPTS) {
+      candidate.used_at = nowIso();
+      writeEmailAuthState(state);
+      return sendError(res, req, 429, 'code_attempts_exceeded', 'verification code attempts exceeded');
+    }
+
+    if (candidate.code_hash !== hashEmailAuthSecret(code)) {
+      candidate.attempts = (candidate.attempts || 0) + 1;
+      writeEmailAuthState(state);
+      return sendError(res, req, 401, 'invalid_code', 'verification code is invalid');
+    }
+
+    candidate.used_at = nowIso();
+    let user = findEmailUserByEmail(state, email);
+    if (!user) {
+      user = {
+        id: crypto.randomUUID(),
+        email,
+        status: 'active',
+        created_at: nowIso(),
+        updated_at: nowIso(),
+        email_verified_at: nowIso(),
+        last_login_at: nowIso(),
+      };
+      state.users.push(user);
+    } else {
+      user.updated_at = nowIso();
+      user.email_verified_at = user.email_verified_at || nowIso();
+      user.last_login_at = nowIso();
+    }
+
+    const authToken = `ema_${crypto.randomBytes(24).toString('base64url')}`;
+    state.sessions.push({
+      id: crypto.randomUUID(),
+      user_id: user.id,
+      token_hash: hashEmailAuthSecret(authToken),
+      created_at: nowIso(),
+      last_seen_at: nowIso(),
+      expires_at: new Date(Date.now() + EMAIL_SESSION_TTL_MS).toISOString(),
+    });
+
+    writeEmailAuthState(state);
+    setEmailAuthCookie(res, authToken);
+
+    log('info', 'email_auth_verified', {
+      request_id: req.requestId,
+      user_id: user.id,
+      email_hash: sha256Hex(email).slice(0, 12),
+    });
+
+    return sendOk(res, req, {
+      user: serializeEmailUser(user),
+      auth_token: authToken,
+      session_expires_at: new Date(Date.now() + EMAIL_SESSION_TTL_MS).toISOString(),
+    });
+  });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const token = readEmailAuthToken(req);
+  const state = readEmailAuthState();
+  const auth = getEmailAuthSession(state, token);
+  if (!auth) {
+    return sendError(res, req, 401, 'unauthorized', 'not logged in');
+  }
+
+  return sendOk(res, req, {
+    user: serializeEmailUser(auth.user),
+    session_expires_at: auth.session.expires_at,
+  });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const token = readEmailAuthToken(req);
+  clearEmailAuthCookie(res);
+
+  if (!token) {
+    return sendOk(res, req, { logged_out: true });
+  }
+
+  return withEmailAuthLock(() => {
+    const state = readEmailAuthState();
+    const tokenHash = hashEmailAuthSecret(token);
+    state.sessions = (state.sessions || []).filter((item) => item.token_hash !== tokenHash);
+    writeEmailAuthState(state);
+    return sendOk(res, req, { logged_out: true });
   });
 });
 
