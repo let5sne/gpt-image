@@ -18,6 +18,8 @@ const AUTH_TOKEN = process.env.APP_ACCESS_TOKEN || '';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === 'true' || IS_VERCEL;
 const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || 'openai').trim().toLowerCase();
+const DATABASE_URL = (process.env.DATABASE_URL || '').trim();
+const DB_DUAL_WRITE = process.env.DB_DUAL_WRITE === 'true';
 
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
   'openai',
@@ -164,6 +166,7 @@ const JOB_RETENTION_MS = Number(process.env.JOB_RETENTION_MS || 15 * 60 * 1000);
 const CREDITS_ENABLED = process.env.CREDITS_ENABLED === 'true';
 const CREDIT_CODE_PEPPER = process.env.CREDIT_CODE_PEPPER || 'change-me';
 const CREDITS_FILE = process.env.CREDITS_FILE || path.join(STORAGE_DIR, 'credits.json');
+const ADMIN_AUDIT_LOG_FILE = process.env.ADMIN_AUDIT_LOG_FILE || path.join(STORAGE_DIR, 'admin-audit.log');
 
 if (CREDITS_ENABLED && (!process.env.CREDIT_CODE_PEPPER || CREDIT_CODE_PEPPER === 'change-me')) {
   throw new Error(
@@ -182,6 +185,18 @@ const ADMIN_BATCH_MAX_CREDITS_PER_CODE = Number(process.env.ADMIN_BATCH_MAX_CRED
 
 const dailyUsage = new Map();
 const jobs = new Map();
+const processStartedAt = Date.now();
+let dbPool = null;
+let dbUnavailableLogged = false;
+let creditsDualWriteQueue = Promise.resolve();
+let adminAuditDualWriteQueue = Promise.resolve();
+const runtimeMetrics = {
+  requests_total: 0,
+  errors_total: 0,
+  by_status: {},
+  by_path: {},
+  error_codes: {},
+};
 const dailyUsageGc = setInterval(() => {
   const today = new Date().toISOString().slice(0, 10);
   for (const key of dailyUsage.keys()) {
@@ -462,6 +477,7 @@ function writeCreditsState(state) {
   const tmp = `${CREDITS_FILE}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
   fs.renameSync(tmp, CREDITS_FILE);
+  enqueueCreditsSnapshotDualWrite(state, 'credits_state_write');
 }
 
 if (CREDITS_ENABLED) {
@@ -474,6 +490,12 @@ function withCreditsLock(fn) {
   creditsMutex = next.catch(() => {});
   return next;
 }
+
+const creditsRepository = {
+  readState: () => readCreditsState(),
+  writeState: (state) => writeCreditsState(state),
+  withLock: (fn) => withCreditsLock(fn),
+};
 
 async function safeReleaseCredits(reservation, note, requestId) {
   if (!reservation || !CREDITS_ENABLED) return null;
@@ -505,6 +527,151 @@ function log(level, message, meta = {}) {
   );
 }
 
+function toIsoOrNull(value) {
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : new Date(time).toISOString();
+}
+
+function toJson(value) {
+  return JSON.stringify(value && typeof value === 'object' ? value : {});
+}
+
+function getDbPool() {
+  if (!DB_DUAL_WRITE || !DATABASE_URL) return null;
+  if (dbPool) return dbPool;
+  try {
+    // Optional dependency for M2 scaffold. If absent, primary file path still works.
+    // eslint-disable-next-line global-require
+    const { Pool } = require('pg');
+    dbPool = new Pool({
+      connectionString: DATABASE_URL,
+      max: Number(process.env.DB_POOL_MAX || 4),
+    });
+    return dbPool;
+  } catch (err) {
+    if (!dbUnavailableLogged) {
+      dbUnavailableLogged = true;
+      log('error', 'db_dual_write_unavailable', { message: err.message });
+    }
+    return null;
+  }
+}
+
+async function dualWriteCreditsSnapshot(state, reason) {
+  const pool = getDbPool();
+  if (!pool) return;
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query('delete from credit_ledger');
+    await client.query('delete from redemption_codes');
+    await client.query('delete from wallets');
+    await client.query('delete from users');
+    await client.query('delete from redemption_batches');
+
+    for (const user of state.users || []) {
+      await client.query(
+        'insert into users(id, user_token_hash, status, created_at, updated_at) values ($1,$2,$3,$4,$5)',
+        [user.id, user.user_token_hash, user.status || 'active', toIsoOrNull(user.created_at) || nowIso(), toIsoOrNull(user.updated_at) || nowIso()]
+      );
+    }
+
+    for (const account of state.accounts || []) {
+      await client.query(
+        'insert into wallets(id, user_id, available_credits, reserved_credits, created_at, updated_at) values ($1,$2,$3,$4,$5,$6)',
+        [account.id, account.user_id, account.available_credits || 0, account.reserved_credits || 0, toIsoOrNull(account.created_at) || nowIso(), toIsoOrNull(account.updated_at) || nowIso()]
+      );
+    }
+
+    for (const batch of state.redemption_batches || []) {
+      await client.query(
+        'insert into redemption_batches(id, name, credits_per_code, code_count, expires_at, created_at) values ($1,$2,$3,$4,$5,$6)',
+        [batch.id, batch.name, batch.credits_per_code || 0, batch.code_count || 0, toIsoOrNull(batch.expires_at), toIsoOrNull(batch.created_at) || nowIso()]
+      );
+    }
+
+    for (const code of state.redemption_codes || []) {
+      await client.query(
+        'insert into redemption_codes(id, batch_id, code_hash, code_hint, credits, status, redeemed_by_user_id, redeemed_at, revoked_at, revoked_note, expires_at, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+        [
+          code.id,
+          code.batch_id,
+          code.code_hash,
+          code.code_hint || null,
+          code.credits || 0,
+          code.status || 'active',
+          code.redeemed_by_user_id || null,
+          toIsoOrNull(code.redeemed_at),
+          toIsoOrNull(code.revoked_at),
+          code.revoked_note || null,
+          toIsoOrNull(code.expires_at),
+          toIsoOrNull(code.created_at) || nowIso(),
+        ]
+      );
+    }
+
+    for (const ledger of state.credit_ledger || []) {
+      await client.query(
+        'insert into credit_ledger(id, user_id, type, credits_delta, available_after, reserved_after, reservation_id, redemption_code_id, note, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [
+          ledger.id,
+          ledger.user_id,
+          ledger.type,
+          ledger.credits_delta || 0,
+          ledger.available_after || 0,
+          ledger.reserved_after || 0,
+          ledger.job_id || null,
+          ledger.redemption_code_id || null,
+          ledger.note || null,
+          toIsoOrNull(ledger.created_at) || nowIso(),
+        ]
+      );
+    }
+
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    log('error', 'db_dual_write_snapshot_failed', {
+      reason,
+      message: err.message,
+    });
+  } finally {
+    client.release();
+  }
+}
+
+function enqueueCreditsSnapshotDualWrite(state, reason) {
+  if (!DB_DUAL_WRITE || !DATABASE_URL) return;
+  const snapshot = JSON.parse(JSON.stringify(state));
+  creditsDualWriteQueue = creditsDualWriteQueue
+    .then(() => dualWriteCreditsSnapshot(snapshot, reason))
+    .catch(() => {});
+}
+
+async function dualWriteAdminAudit(entry) {
+  const pool = getDbPool();
+  if (!pool) return;
+  try {
+    await pool.query(
+      'insert into admin_audit_logs(ts, action, request_id, detail) values ($1,$2,$3,$4::jsonb)',
+      [toIsoOrNull(entry.ts) || nowIso(), entry.action, entry.request_id || null, toJson(entry.detail)]
+    );
+  } catch (err) {
+    log('error', 'db_dual_write_admin_audit_failed', {
+      action: entry.action,
+      message: err.message,
+    });
+  }
+}
+
+function enqueueAdminAuditDualWrite(entry) {
+  if (!DB_DUAL_WRITE || !DATABASE_URL) return;
+  adminAuditDualWriteQueue = adminAuditDualWriteQueue
+    .then(() => dualWriteAdminAudit(entry))
+    .catch(() => {});
+}
+
 function sendOk(res, req, data, status = 200) {
   return res.status(status).json({
     success: true,
@@ -514,6 +681,8 @@ function sendOk(res, req, data, status = 200) {
 }
 
 function sendError(res, req, status, code, message, details) {
+  runtimeMetrics.errors_total += 1;
+  runtimeMetrics.error_codes[code] = (runtimeMetrics.error_codes[code] || 0) + 1;
   return res.status(status).json({
     success: false,
     error: {
@@ -523,6 +692,28 @@ function sendError(res, req, status, code, message, details) {
     },
     request_id: req.requestId,
   });
+}
+
+function appendAdminAudit(action, req, detail = {}) {
+  const entry = {
+    ts: nowIso(),
+    action,
+    request_id: req.requestId,
+    detail,
+  };
+  enqueueAdminAuditDualWrite(entry);
+  if (!ENABLE_LOCAL_STORAGE) return;
+  try {
+    fs.mkdirSync(path.dirname(ADMIN_AUDIT_LOG_FILE), { recursive: true });
+    const line = JSON.stringify(entry);
+    fs.appendFileSync(ADMIN_AUDIT_LOG_FILE, `${line}\n`, 'utf-8');
+  } catch (err) {
+    log('error', 'admin_audit_log_failed', {
+      request_id: req.requestId,
+      action,
+      message: err.message,
+    });
+  }
 }
 
 function parsePixels(size) {
@@ -625,9 +816,9 @@ function getCreditCost(quality, n) {
 
 function reserveCreditsForRequest(req, res, quality, n) {
   if (!CREDITS_ENABLED) return null;
-  return withCreditsLock(() => {
+  return creditsRepository.withLock(() => {
     const userToken = getUserToken(req);
-    const state = readCreditsState();
+    const state = creditsRepository.readState();
     const user = findUserByToken(state, userToken);
     if (!user) {
       sendError(res, req, 401, 'wallet_required', 'redeem a code before generating images');
@@ -655,7 +846,7 @@ function reserveCreditsForRequest(req, res, quality, n) {
       jobId: reservationId,
       note: `quality=${cost.quality}`,
     });
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
 
     return {
       id: reservationId,
@@ -668,8 +859,8 @@ function reserveCreditsForRequest(req, res, quality, n) {
 
 function settleCredits(reservation) {
   if (!reservation || !CREDITS_ENABLED) return Promise.resolve(null);
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const account = getAccount(state, reservation.userId);
     if (!account) return null;
     account.reserved_credits = Math.max(0, account.reserved_credits - reservation.credits);
@@ -677,15 +868,15 @@ function settleCredits(reservation) {
       jobId: reservation.id,
       note: `quality=${reservation.quality}`,
     });
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
     return serializeWallet(state, reservation.userId);
   });
 }
 
 function releaseCredits(reservation, note = 'generation failed') {
   if (!reservation || !CREDITS_ENABLED) return Promise.resolve(null);
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const account = getAccount(state, reservation.userId);
     if (!account) return null;
     account.reserved_credits = Math.max(0, account.reserved_credits - reservation.credits);
@@ -694,14 +885,14 @@ function releaseCredits(reservation, note = 'generation failed') {
       jobId: reservation.id,
       note,
     });
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
     return serializeWallet(state, reservation.userId);
   });
 }
 
 function grantCreditsToUserToken(userToken, credits, note) {
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const user = findUserByToken(state, userToken);
     if (!user) return null;
     const account = getAccount(state, user.id);
@@ -710,15 +901,15 @@ function grantCreditsToUserToken(userToken, credits, note) {
     account.available_credits += credits;
     account.updated_at = new Date().toISOString();
     appendLedger(state, user.id, 'admin_grant', credits, account, { note });
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
 
     return serializeWallet(state, user.id);
   });
 }
 
 function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt }) {
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const batchId = crypto.randomUUID();
     const now = new Date().toISOString();
     const plainCodes = [];
@@ -765,7 +956,7 @@ function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt 
       });
     }
 
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
 
     return {
       batch,
@@ -775,7 +966,7 @@ function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt 
 }
 
 function listRedemptionBatches(limit = 50) {
-  const state = readCreditsState();
+  const state = creditsRepository.readState();
   const byBatch = new Map();
   for (const item of state.redemption_codes || []) {
     if (!byBatch.has(item.batch_id)) {
@@ -805,7 +996,7 @@ function listRedemptionBatches(limit = 50) {
 }
 
 function listRedemptionCodes({ batchId, status, limit = 100 }) {
-  const state = readCreditsState();
+  const state = creditsRepository.readState();
   let codes = (state.redemption_codes || []).slice();
   if (batchId) {
     codes = codes.filter((item) => item.batch_id === batchId);
@@ -820,8 +1011,8 @@ function listRedemptionCodes({ batchId, status, limit = 100 }) {
 }
 
 function revokeRedemptionCode(codeId, note) {
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const code = (state.redemption_codes || []).find((item) => item.id === codeId);
     if (!code) return { error: 'not_found' };
     if (code.status === 'redeemed') return { error: 'already_redeemed' };
@@ -830,7 +1021,7 @@ function revokeRedemptionCode(codeId, note) {
     code.status = 'revoked';
     code.revoked_at = new Date().toISOString();
     code.revoked_note = note || null;
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
     return { code: serializeAdminRedemptionCode(code) };
   });
 }
@@ -1225,7 +1416,7 @@ function getStoredJobItems() {
 function buildAdminOverview() {
   const gallery = readMeta();
   const jobItems = getStoredJobItems();
-  const creditState = readCreditsState();
+  const creditState = creditsRepository.readState();
   const accounts = creditState.accounts || [];
   const codes = creditState.redemption_codes || [];
 
@@ -1282,7 +1473,17 @@ function buildAdminOverview() {
 app.set('trust proxy', 1);
 app.use((req, res, next) => {
   req.requestId = crypto.randomUUID();
+  req.requestStartAt = Date.now();
   res.setHeader('x-request-id', req.requestId);
+  res.on('finish', () => {
+    runtimeMetrics.requests_total += 1;
+    const statusKey = String(res.statusCode || 0);
+    runtimeMetrics.by_status[statusKey] = (runtimeMetrics.by_status[statusKey] || 0) + 1;
+    const pathKey = req.route && req.route.path
+      ? `${req.method} ${req.baseUrl || ''}${req.route.path}`
+      : `${req.method} ${req.path}`;
+    runtimeMetrics.by_path[pathKey] = (runtimeMetrics.by_path[pathKey] || 0) + 1;
+  });
   next();
 });
 app.use(express.json({ limit: '2mb' }));
@@ -1329,6 +1530,18 @@ app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
   return sendOk(res, req, buildAdminOverview());
 });
 
+app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
+  return sendOk(res, req, {
+    started_at: new Date(processStartedAt).toISOString(),
+    uptime_ms: Date.now() - processStartedAt,
+    requests_total: runtimeMetrics.requests_total,
+    errors_total: runtimeMetrics.errors_total,
+    by_status: { ...runtimeMetrics.by_status },
+    by_path: { ...runtimeMetrics.by_path },
+    error_codes: { ...runtimeMetrics.error_codes },
+  });
+});
+
 app.post('/api/admin/credits/grant', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
@@ -1352,6 +1565,10 @@ app.post('/api/admin/credits/grant', requireAdminAuth, async (req, res) => {
 
   log('info', 'admin_credits_granted', {
     request_id: req.requestId,
+    credits,
+    note_hash: sha256Hex(note || 'admin grant').slice(0, 12),
+  });
+  appendAdminAudit('admin_credits_grant', req, {
     credits,
     note_hash: sha256Hex(note || 'admin grant').slice(0, 12),
   });
@@ -1397,6 +1614,11 @@ app.post('/api/admin/redemption-batches', requireAdminAuth, async (req, res) => 
 
   log('info', 'admin_redemption_batch_created', {
     request_id: req.requestId,
+    batch_id: created.batch.id,
+    code_count: count,
+    credits_per_code: creditsPerCode,
+  });
+  appendAdminAudit('admin_redemption_batch_create', req, {
     batch_id: created.batch.id,
     code_count: count,
     credits_per_code: creditsPerCode,
@@ -1454,6 +1676,10 @@ app.post('/api/admin/redemption-codes/:id/revoke', requireAdminAuth, async (req,
     code_id: codeId,
     note_hash: sha256Hex(note || '').slice(0, 12),
   });
+  appendAdminAudit('admin_redemption_code_revoke', req, {
+    code_id: codeId,
+    note_hash: sha256Hex(note || '').slice(0, 12),
+  });
 
   return sendOk(res, req, {
     code: result.code,
@@ -1470,8 +1696,8 @@ app.post('/api/redeem', async (req, res) => {
     return sendError(res, req, 400, 'invalid_code', 'redemption code is required');
   }
 
-  return withCreditsLock(() => {
-    const state = readCreditsState();
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
     const codeHash = hashSecret(code);
     const redemptionCode = state.redemption_codes.find((item) => item.code_hash === codeHash);
     if (!redemptionCode) {
@@ -1518,7 +1744,7 @@ app.post('/api/redeem', async (req, res) => {
     appendLedger(state, user.id, 'redeem', redemptionCode.credits, account, {
       redemptionCodeId: redemptionCode.id,
     });
-    writeCreditsState(state);
+    creditsRepository.writeState(state);
 
     return sendOk(res, req, {
       user_token: userToken,
@@ -1533,7 +1759,7 @@ app.get('/api/wallet', (req, res) => {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
   }
   const userToken = getUserToken(req);
-  const state = readCreditsState();
+  const state = creditsRepository.readState();
   const user = findUserByToken(state, userToken);
   if (!user) {
     return sendError(res, req, 401, 'wallet_required', 'wallet not found');

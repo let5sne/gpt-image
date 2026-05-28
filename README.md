@@ -54,6 +54,24 @@ image/
 └── README.md
 ```
 
+## M2 数据库迁移脚手架
+
+当前仓库已提供数据库迁移脚手架（不影响现有文件存储主流程）：
+
+- `db/schema.sql`：关系型表结构（PostgreSQL）
+- `db/migrations/001_init.sql`：初始化 migration
+- `scripts/export-migration-seed.js`：从 `storage/*` 导出统一 seed
+
+导出迁移 seed：
+
+```bash
+npm run db:seed-export
+```
+
+导出结果会写入：`db/seed/bootstrap.json`。
+
+完整迁移分阶段说明见：`docs/m2-database-migration.md`。
+
 ## 快速启动
 
 ```bash
@@ -125,6 +143,7 @@ vercel --prod
 
 ```bash
 ADMIN_TOKEN=replace-with-a-different-strong-random-admin-token
+ADMIN_AUDIT_LOG_FILE=./storage/admin-audit.log
 ```
 
 访问：
@@ -136,6 +155,15 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/overview
 浏览器页面：`http://localhost:3000/admin.html`
 
 该接口返回配置状态、gallery 数量与最近记录、jobs 状态分布、credits 余额与兑换码统计。返回内容会避开 `code_hash`、`user_token_hash` 等敏感字段，只作为内测期查账和排障入口。
+
+运行指标（用于告警对接）：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/metrics
+```
+
+该接口返回进程 uptime、请求总量、错误总量、按状态码统计、按路径统计和错误码统计。
+管理员写操作（补偿、发码、撤销）会追加写入 `ADMIN_AUDIT_LOG_FILE`（JSONL），用于审计追踪。
 
 ### 手动补偿 credits
 

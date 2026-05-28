@@ -91,6 +91,7 @@ function setBaseEnv() {
   delete process.env.ADMIN_GRANT_MAX_CREDITS;
   delete process.env.ADMIN_BATCH_MAX_CODES;
   delete process.env.ADMIN_BATCH_MAX_CREDITS_PER_CODE;
+  delete process.env.ADMIN_AUDIT_LOG_FILE;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -691,6 +692,29 @@ test('GET /api/admin/overview requires admin token and returns redacted operatio
   assert.equal(JSON.stringify(overview.body.data).includes('user_token_hash'), false);
 });
 
+test('GET /api/admin/metrics requires admin token and returns runtime counters', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const app = loadFreshApp();
+
+  const unauthorized = await request(app).get('/api/admin/metrics');
+  assert.equal(unauthorized.status, 401);
+
+  await request(app).get('/api/health');
+  const metrics = await request(app)
+    .get('/api/admin/metrics')
+    .set('x-admin-token', 'admin-secret');
+
+  assert.equal(metrics.status, 200);
+  assert.equal(metrics.body.success, true);
+  assert.equal(typeof metrics.body.data.started_at, 'string');
+  assert.equal(typeof metrics.body.data.uptime_ms, 'number');
+  assert.ok(metrics.body.data.requests_total >= 2);
+  assert.ok(metrics.body.data.errors_total >= 1);
+  assert.ok(metrics.body.data.error_codes.unauthorized >= 1);
+  assert.ok(metrics.body.data.by_path['GET /api/admin/metrics'] >= 1);
+});
+
 test('POST /api/admin/credits/grant requires admin token and grants credits to an existing wallet', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';
@@ -790,6 +814,53 @@ test('admin redemption APIs create batches, list redacted codes, and revoke acti
     .set('x-admin-token', 'admin-secret')
     .send({ note: 'manual revoke again' });
   assert.equal(revokeAgain.status, 409);
+});
+
+test('admin actions append audit logs for grant and redemption operations', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  const auditFile = path.join(createTempDir(), 'admin-audit.log');
+  process.env.ADMIN_AUDIT_LOG_FILE = auditFile;
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const redeemed = await request(app)
+    .post('/api/redeem')
+    .send({ code: 'TEST-CODE-100' });
+  const userToken = redeemed.body.data.user_token;
+
+  const granted = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('x-admin-token', 'admin-secret')
+    .send({ user_token: userToken, credits: 10, note: 'audit check' });
+  assert.equal(granted.status, 200);
+
+  const created = await request(app)
+    .post('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'audit-batch', count: 1, credits_per_code: 10, prefix: 'ADT' });
+  assert.equal(created.status, 201);
+
+  const codes = await request(app)
+    .get('/api/admin/redemption-codes')
+    .set('x-admin-token', 'admin-secret')
+    .query({ batch_id: created.body.data.batch.id });
+  assert.equal(codes.status, 200);
+
+  const revoked = await request(app)
+    .post(`/api/admin/redemption-codes/${codes.body.data.codes[0].id}/revoke`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ note: 'audit revoke' });
+  assert.equal(revoked.status, 200);
+
+  const lines = fs.readFileSync(auditFile, 'utf-8').trim().split('\n').filter(Boolean);
+  assert.ok(lines.length >= 3);
+  const actions = lines.map((line) => JSON.parse(line).action);
+  assert.ok(actions.includes('admin_credits_grant'));
+  assert.ok(actions.includes('admin_redemption_batch_create'));
+  assert.ok(actions.includes('admin_redemption_code_revoke'));
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {
