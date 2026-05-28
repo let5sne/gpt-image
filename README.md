@@ -165,6 +165,30 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/metrics
 该接口返回进程 uptime、请求总量、错误总量、按状态码统计、按路径统计和错误码统计。
 管理员写操作（补偿、发码、撤销）会追加写入 `ADMIN_AUDIT_LOG_FILE`（JSONL），用于审计追踪。
 
+### 管理员邮箱用户查询
+
+浏览器页面：`http://localhost:3000/admin.html`
+
+后台已支持按邮箱检索用户，并展示：
+
+- 邮箱用户基础状态
+- 最近登录时间
+- 邮箱验证时间
+- 是否已关联钱包
+- 钱包余额（可用 / 冻结）
+
+接口查询示例：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/email-users?limit=50&q=alpha"
+```
+
+适用场景：
+
+- 运营确认某邮箱是否已经登录过
+- 排查某邮箱是否已经绑定钱包
+- 补偿前先确认当前余额
+
 ## 邮箱用户系统（验证码登录）
 
 启用邮箱登录（无密码）：
@@ -221,6 +245,43 @@ curl -X POST http://localhost:3000/api/admin/credits/grant \
 ```
 
 该接口只接受已存在的 `user_token`，不会自动创建钱包；每次补偿都会写入 `credit_ledger`，类型为 `admin_grant`。
+
+### 按邮箱补偿 credits
+
+如果运营手里没有 `user_token`，可以直接按邮箱补偿：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/credits/grant-by-email \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"email":"user@example.com","credits":25,"note":"support adjustment by email"}'
+```
+
+行为说明：
+
+- 如果该邮箱用户已经关联钱包：直接补偿到现有钱包
+- 如果该邮箱用户存在但还没有钱包：系统会自动创建钱包用户并补偿
+- 如果该邮箱从未登录过：返回 `email_user_not_found`
+
+返回值会包含：
+
+- `wallet.available_credits`
+- `wallet.reserved_credits`
+- `wallet_user_created`：是否刚创建钱包用户
+- `created_user_token`：仅在自动创建钱包时返回，便于后续排查
+
+该接口同样会写入 `credit_ledger` 与 `ADMIN_AUDIT_LOG_FILE`。
+
+### 最小运营流程
+
+推荐按下面顺序操作：
+
+1. 打开 `http://localhost:3000/admin.html`，输入 `ADMIN_TOKEN`。
+2. 先在“邮箱用户”里搜索目标邮箱，确认是否已登录、是否已有关联钱包、当前余额是多少。
+3. 如果已经有关联钱包：直接使用“按邮箱补偿”。
+4. 如果邮箱用户已存在但未关联钱包：仍可直接使用“按邮箱补偿”，系统会自动创建钱包。
+5. 补偿完成后，再次查询邮箱，确认余额是否符合预期。
+6. 如需做审计追踪，查看 `ADMIN_AUDIT_LOG_FILE` 中对应的 `admin_credits_grant_by_email` 或 `admin_credits_grant` 记录。
 
 ### 兑换码批次管理
 
