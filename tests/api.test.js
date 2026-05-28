@@ -342,6 +342,83 @@ test('POST /api/generate creates async Replicate job when provider is replicate'
   }
 });
 
+test('restores pending Replicate job from local storage and continues polling', async () => {
+  setBaseEnv();
+  process.env.IMAGE_PROVIDER = 'replicate';
+  process.env.REPLICATE_API_TOKEN = 'replicate-token';
+  process.env.REPLICATE_POLL_INTERVAL_MS = '1';
+  process.env.REPLICATE_MAX_POLL_MS = '1000';
+
+  const storageDir = process.env.STORAGE_DIR;
+  fs.mkdirSync(storageDir, { recursive: true });
+  fs.writeFileSync(path.join(storageDir, 'jobs.json'), JSON.stringify([{
+    id: 'restored-job',
+    provider: 'replicate',
+    predictionId: 'pred-restored',
+    getUrl: 'https://api.replicate.com/v1/predictions/pred-restored',
+    status: 'starting',
+    prompt: 'restored prompt',
+    size: '1024x1024',
+    outputFormat: 'png',
+    creditReservation: null,
+    requestId: 'req-restored',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    prediction: { id: 'pred-restored', status: 'starting' },
+    images: [],
+  }], null, 2), 'utf-8');
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options = {}) => {
+    const urlText = String(url);
+    calls.push({ url: urlText, options });
+
+    if (urlText === 'https://api.replicate.com/v1/predictions/pred-restored') {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            id: 'pred-restored',
+            status: 'succeeded',
+            output: ['https://replicate.delivery/pbxt/restored.png'],
+          };
+        },
+      };
+    }
+
+    if (urlText === 'https://replicate.delivery/pbxt/restored.png') {
+      return {
+        ok: true,
+        status: 200,
+        async arrayBuffer() {
+          return Buffer.from('restored-png');
+        },
+      };
+    }
+
+    throw new Error(`unexpected fetch ${urlText}`);
+  };
+
+  try {
+    const app = loadFreshApp();
+    const completed = await waitFor(async () => {
+      const res = await request(app).get('/api/jobs/restored-job');
+      if (res.body.data && res.body.data.status === 'succeeded') return res;
+      return null;
+    });
+
+    assert.equal(completed.status, 200);
+    assert.equal(completed.body.data.prediction_id, 'pred-restored');
+    assert.equal(completed.body.data.images.length, 1);
+    assert.match(completed.body.data.images[0].url, /^\/storage\//);
+    assert.ok(calls.some((call) => call.url === 'https://api.replicate.com/v1/predictions/pred-restored'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('POST /api/redeem creates user wallet and prevents duplicate redemption', async () => {
   setBaseEnv();
   const creditsFile = path.join(createTempDir(), 'credits.json');

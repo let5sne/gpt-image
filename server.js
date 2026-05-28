@@ -173,12 +173,14 @@ if (typeof dailyUsageGc.unref === 'function') {
 
 // ── 本地存储目录 ────────────────────────────────────────
 const META_FILE = path.join(STORAGE_DIR, 'metadata.json');
+const JOBS_FILE = path.join(STORAGE_DIR, 'jobs.json');
 const IMAGE_DIR = path.join(STORAGE_DIR, 'images');
 
 if (ENABLE_LOCAL_STORAGE) {
   if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
   if (!fs.existsSync(IMAGE_DIR)) fs.mkdirSync(IMAGE_DIR, { recursive: true });
   if (!fs.existsSync(META_FILE)) fs.writeFileSync(META_FILE, '[]', 'utf-8');
+  if (!fs.existsSync(JOBS_FILE)) fs.writeFileSync(JOBS_FILE, '[]', 'utf-8');
 
   try {
     for (const entry of fs.readdirSync(STORAGE_DIR, { withFileTypes: true })) {
@@ -200,6 +202,43 @@ function readMeta() {
 function writeMeta(arr) {
   if (!ENABLE_LOCAL_STORAGE) return;
   fs.writeFileSync(META_FILE, JSON.stringify(arr, null, 2), 'utf-8');
+}
+
+function readStoredJobs() {
+  if (!ENABLE_LOCAL_STORAGE) return [];
+  try {
+    const value = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf-8'));
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredJobs(items) {
+  if (!ENABLE_LOCAL_STORAGE) return;
+  const tmp = `${JOBS_FILE}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(items, null, 2), 'utf-8');
+  fs.renameSync(tmp, JOBS_FILE);
+}
+
+function persistJobs() {
+  if (!ENABLE_LOCAL_STORAGE) return;
+  writeStoredJobs([...jobs.values()]);
+}
+
+function persistJob(job) {
+  if (!job) return;
+  jobs.set(job.id, job);
+  persistJobs();
+}
+
+function deletePersistedJob(jobId) {
+  jobs.delete(jobId);
+  persistJobs();
+}
+
+function isTerminalJobStatus(status) {
+  return ['succeeded', 'failed', 'canceled', 'timed_out'].includes(status);
 }
 
 function emptyCreditsState() {
@@ -460,7 +499,7 @@ function getReplicateCreateUrl() {
 
 function scheduleJobCleanup(jobId) {
   const timer = setTimeout(() => {
-    jobs.delete(jobId);
+    deletePersistedJob(jobId);
   }, JOB_RETENTION_MS);
   if (typeof timer.unref === 'function') {
     timer.unref();
@@ -576,7 +615,7 @@ async function pollReplicateJob(jobId) {
   while (Date.now() - job.createdAt < REPLICATE_MAX_POLL_MS) {
     await new Promise((resolve) => setTimeout(resolve, REPLICATE_POLL_INTERVAL_MS));
     const current = jobs.get(jobId);
-    if (!current || ['succeeded', 'failed', 'canceled', 'timed_out'].includes(current.status)) return;
+    if (!current || isTerminalJobStatus(current.status)) return;
 
     try {
       const pollController = new AbortController();
@@ -600,6 +639,7 @@ async function pollReplicateJob(jobId) {
       current.prediction = prediction;
       current.status = prediction.status || current.status;
       current.updatedAt = Date.now();
+      persistJob(current);
 
       if (current.status === 'succeeded') {
         const tookMs = Date.now() - current.createdAt;
@@ -632,6 +672,8 @@ async function pollReplicateJob(jobId) {
           charged_credits: current.creditReservation ? current.creditReservation.credits : 0,
           wallet: settledWallet,
         };
+        current.updatedAt = Date.now();
+        persistJob(current);
         log('info', 'replicate_generate_success', {
           request_id: current.requestId,
           job_id: jobId,
@@ -648,6 +690,8 @@ async function pollReplicateJob(jobId) {
       if (['failed', 'canceled'].includes(current.status)) {
         await safeReleaseCredits(current.creditReservation, `replicate ${current.status}`, current.requestId);
         current.error = prediction.error || 'replicate prediction failed';
+        current.updatedAt = Date.now();
+        persistJob(current);
         log('error', 'replicate_generate_failed', {
           request_id: current.requestId,
           job_id: jobId,
@@ -664,6 +708,8 @@ async function pollReplicateJob(jobId) {
         await safeReleaseCredits(current.creditReservation, 'replicate poll error', current.requestId);
         current.status = 'failed';
         current.error = e.message;
+        current.updatedAt = Date.now();
+        persistJob(current);
         scheduleJobCleanup(jobId);
       }
       log('error', 'replicate_poll_error', {
@@ -676,10 +722,12 @@ async function pollReplicateJob(jobId) {
   }
 
   const current = jobs.get(jobId);
-  if (current && !['succeeded', 'failed', 'canceled'].includes(current.status)) {
+  if (current && !isTerminalJobStatus(current.status)) {
     await safeReleaseCredits(current.creditReservation, 'replicate timed out', current.requestId);
     current.status = 'timed_out';
     current.error = 'replicate prediction timed out';
+    current.updatedAt = Date.now();
+    persistJob(current);
     scheduleJobCleanup(jobId);
   }
 }
@@ -701,6 +749,57 @@ function serializeJob(job) {
     created_at: new Date(job.createdAt).toISOString(),
     updated_at: job.updatedAt ? new Date(job.updatedAt).toISOString() : null,
   };
+}
+
+function restoreStoredJobs() {
+  if (!ENABLE_LOCAL_STORAGE || PROVIDER_CONFIG.kind !== 'replicate') return;
+
+  let restoredCount = 0;
+  let resumedCount = 0;
+
+  for (const item of readStoredJobs()) {
+    if (!item || !item.id) continue;
+    restoredCount += 1;
+
+    if (item.creditReservation && CREDITS_ENABLED) {
+      const state = readCreditsState();
+      const account = getAccount(state, item.creditReservation.userId);
+      if (!account || account.reserved_credits < item.creditReservation.credits) {
+        item.status = 'failed';
+        item.error = 'credit reservation inconsistent after restore';
+        item.updatedAt = Date.now();
+        persistJob(item);
+        scheduleJobCleanup(item.id);
+        continue;
+      }
+    }
+
+    jobs.set(item.id, item);
+    if (isTerminalJobStatus(item.status)) {
+      scheduleJobCleanup(item.id);
+      continue;
+    }
+
+    resumedCount += 1;
+    pollReplicateJob(item.id).catch(async (e) => {
+        const current = jobs.get(item.id);
+        if (current) {
+          await safeReleaseCredits(current.creditReservation, 'restore poll failed', current.requestId);
+          current.status = 'failed';
+          current.error = e.message;
+          current.updatedAt = Date.now();
+          persistJob(current);
+          scheduleJobCleanup(current.id);
+        }
+      });
+  }
+
+  if (restoredCount > 0) {
+    log('info', 'jobs_restored', {
+      restored_count: restoredCount,
+      resumed_count: resumedCount,
+    });
+  }
 }
 
 function readTokenFromRequest(req) {
@@ -999,12 +1098,14 @@ app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => 
         prediction,
         images: [],
       };
-      jobs.set(jobId, job);
+      persistJob(job);
       pollReplicateJob(jobId).catch((e) => {
         const current = jobs.get(jobId);
         if (current) {
           current.status = 'failed';
           current.error = e.message;
+          current.updatedAt = Date.now();
+          persistJob(current);
         }
       });
 
@@ -1198,6 +1299,8 @@ app.use('/api', (req, res) => {
 });
 
 // ── 启动 ────────────────────────────────────────────────
+restoreStoredJobs();
+
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Image Studio running -> http://localhost:${PORT}`));
 }
