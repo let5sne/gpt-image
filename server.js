@@ -897,6 +897,12 @@ function serializeEmailUser(user) {
   };
 }
 
+function toTimeOrZero(value) {
+  if (!value) return 0;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
 function cleanupEmailAuthState(state) {
   const now = Date.now();
   state.verification_codes = (state.verification_codes || []).filter((item) => {
@@ -1578,6 +1584,7 @@ function buildAdminOverview() {
   const gallery = readMeta();
   const jobItems = getStoredJobItems();
   const creditState = creditsRepository.readState();
+  const emailState = EMAIL_AUTH_ENABLED ? readEmailAuthState() : emptyEmailAuthState();
   const accounts = creditState.accounts || [];
   const codes = creditState.redemption_codes || [];
 
@@ -1586,6 +1593,7 @@ function buildAdminOverview() {
       provider: IMAGE_PROVIDER,
       image_storage_provider: IMAGE_STORAGE_PROVIDER,
       credits_enabled: CREDITS_ENABLED,
+      email_auth_enabled: EMAIL_AUTH_ENABLED,
       auth_required: AUTH_REQUIRED,
       local_storage_enabled: ENABLE_LOCAL_STORAGE,
       has_required_env: missingEnv.length === 0,
@@ -1626,6 +1634,12 @@ function buildAdminOverview() {
         redeemed: codes.filter((item) => item.status === 'redeemed').length,
         expired: codes.filter((item) => item.expires_at && new Date(item.expires_at).getTime() < Date.now()).length,
       },
+    },
+    email_auth: {
+      enabled: EMAIL_AUTH_ENABLED,
+      users: (emailState.users || []).length,
+      active_sessions: (emailState.sessions || []).length,
+      pending_codes: (emailState.verification_codes || []).length,
     },
   };
 }
@@ -1879,6 +1893,35 @@ app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
     by_status: { ...runtimeMetrics.by_status },
     by_path: { ...runtimeMetrics.by_path },
     error_codes: { ...runtimeMetrics.error_codes },
+  });
+});
+
+app.get('/api/admin/email-users', requireAdminAuth, (req, res) => {
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const query = req.query && typeof req.query.q === 'string'
+    ? normalizeEmail(req.query.q)
+    : '';
+  const limitRaw = Number(req.query && req.query.limit);
+  const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+
+  const state = readEmailAuthState();
+  cleanupEmailAuthState(state);
+  writeEmailAuthState(state);
+
+  const users = (state.users || [])
+    .filter((user) => !query || String(user.email || '').includes(query))
+    .sort((left, right) => {
+      const rightScore = toTimeOrZero(right.last_login_at) || toTimeOrZero(right.email_verified_at) || toTimeOrZero(right.created_at);
+      const leftScore = toTimeOrZero(left.last_login_at) || toTimeOrZero(left.email_verified_at) || toTimeOrZero(left.created_at);
+      return rightScore - leftScore;
+    });
+
+  return sendOk(res, req, {
+    total: users.length,
+    users: users.slice(0, limit).map(serializeEmailUser),
   });
 });
 

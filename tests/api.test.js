@@ -938,6 +938,49 @@ test('email auth send-code enforces cooldown', async () => {
   assert.equal(second.body.error.code, 'code_send_cooldown');
 });
 
+test('GET /api/admin/email-users requires admin token and supports query filter', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const app = loadFreshApp();
+
+  const userOneCode = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'alpha@example.com' });
+  await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'alpha@example.com', code: userOneCode.body.data.dev_code });
+
+  const userTwoCode = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'beta@example.com' });
+  await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'beta@example.com', code: userTwoCode.body.data.dev_code });
+
+  const unauthorized = await request(app).get('/api/admin/email-users');
+  assert.equal(unauthorized.status, 401);
+
+  const allUsers = await request(app)
+    .get('/api/admin/email-users')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(allUsers.status, 200);
+  assert.equal(allUsers.body.success, true);
+  assert.equal(allUsers.body.data.total, 2);
+  assert.equal(allUsers.body.data.users.length, 2);
+  assert.equal(allUsers.body.data.users.every((item) => item.email.includes('@')), true);
+
+  const filtered = await request(app)
+    .get('/api/admin/email-users')
+    .set('x-admin-token', 'admin-secret')
+    .query({ q: 'alpha' });
+  assert.equal(filtered.status, 200);
+  assert.equal(filtered.body.data.total, 1);
+  assert.equal(filtered.body.data.users[0].email, 'alpha@example.com');
+});
+
 test('POST /api/generate releases reserved credits when upstream fails', async () => {
   setBaseEnv();
   const creditsFile = path.join(createTempDir(), 'credits.json');

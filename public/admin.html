@@ -353,6 +353,25 @@ h1 {
       </div>
     </aside>
   </div>
+
+  <section class="section" style="margin-top: 16px;">
+    <div class="section-head">
+      <h2>邮箱用户</h2>
+      <span id="emailUsersMeta" class="badge">未加载</span>
+    </div>
+    <div class="section-body">
+      <div class="split" style="margin-bottom: 12px;">
+        <label>
+          检索邮箱
+          <input id="emailUsersQuery" type="text" placeholder="输入邮箱关键字，例如 alpha" />
+        </label>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button id="emailUsersSearchBtn" type="button" class="primary">查询</button>
+        </div>
+      </div>
+      <div id="emailUsersTableWrap" class="empty">暂无数据</div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -363,6 +382,10 @@ const statusLine = document.getElementById('statusLine');
 const grantForm = document.getElementById('grantForm');
 const grantBtn = document.getElementById('grantBtn');
 const jobsTableWrap = document.getElementById('jobsTableWrap');
+const emailUsersMeta = document.getElementById('emailUsersMeta');
+const emailUsersQuery = document.getElementById('emailUsersQuery');
+const emailUsersSearchBtn = document.getElementById('emailUsersSearchBtn');
+const emailUsersTableWrap = document.getElementById('emailUsersTableWrap');
 
 const metricEls = {
   galleryTotal: document.getElementById('galleryTotal'),
@@ -468,6 +491,62 @@ function renderOverview(data) {
   renderJobs(data.jobs.recent || []);
 }
 
+function renderEmailUsers(users, total) {
+  if (!users || users.length === 0) {
+    emailUsersTableWrap.innerHTML = '<div class="empty">暂无邮箱用户</div>';
+    return;
+  }
+
+  const rows = users.map((user) => `
+    <tr>
+      <td class="mono">${escapeHtml(user.id || '-')}</td>
+      <td>${escapeHtml(user.email || '-')}</td>
+      <td>${escapeHtml(user.status || 'active')}</td>
+      <td>${escapeHtml(user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '-')}</td>
+      <td>${escapeHtml(user.email_verified_at ? new Date(user.email_verified_at).toLocaleString('zh-CN') : '-')}</td>
+    </tr>
+  `).join('');
+
+  emailUsersTableWrap.innerHTML = `
+    <table class="table">
+      <thead>
+        <tr><th>ID</th><th>邮箱</th><th>状态</th><th>最近登录</th><th>验证时间</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  emailUsersMeta.textContent = `共 ${formatNumber(total)} 人`;
+  emailUsersMeta.className = 'badge ok';
+}
+
+async function loadEmailUsers() {
+  if (!getAdminToken()) {
+    emailUsersMeta.textContent = '需要 token';
+    emailUsersMeta.className = 'badge bad';
+    emailUsersTableWrap.innerHTML = '<div class="empty">请输入 ADMIN_TOKEN</div>';
+    return;
+  }
+
+  emailUsersSearchBtn.disabled = true;
+  const query = emailUsersQuery.value.trim();
+  try {
+    const data = await api(`/api/admin/email-users?limit=50&q=${encodeURIComponent(query)}`);
+    renderEmailUsers(data.users || [], data.total || 0);
+  } catch (err) {
+    if (String(err.message || '').includes('email auth is not enabled')) {
+      emailUsersMeta.textContent = '邮箱认证未启用';
+      emailUsersMeta.className = 'badge warn';
+      emailUsersTableWrap.innerHTML = '<div class="empty">当前环境未启用邮箱认证。</div>';
+      return;
+    }
+    emailUsersMeta.textContent = '加载失败';
+    emailUsersMeta.className = 'badge bad';
+    emailUsersTableWrap.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+  } finally {
+    emailUsersSearchBtn.disabled = false;
+  }
+}
+
 async function loadOverview() {
   if (!getAdminToken()) {
     setStatus('需要 ADMIN_TOKEN。', 'error');
@@ -478,6 +557,7 @@ async function loadOverview() {
   try {
     const data = await api('/api/admin/overview');
     renderOverview(data);
+    await loadEmailUsers();
     setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
   } catch (err) {
     setStatus(err.message, 'error');
@@ -498,6 +578,13 @@ rememberBtn.addEventListener('click', () => {
 });
 
 refreshBtn.addEventListener('click', loadOverview);
+emailUsersSearchBtn.addEventListener('click', loadEmailUsers);
+emailUsersQuery.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    loadEmailUsers();
+  }
+});
 
 grantForm.addEventListener('submit', async (event) => {
   event.preventDefault();
