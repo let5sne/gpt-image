@@ -122,6 +122,29 @@ h1 {
 .status-line.error { color: var(--danger); }
 .status-line.ok { color: var(--ok); }
 
+.recent-op {
+  display: none;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(45,118,85,.24);
+  border-radius: 8px;
+  background: rgba(53,107,92,.06);
+}
+
+.recent-op.is-visible {
+  display: block;
+}
+
+.recent-op strong {
+  color: var(--ok);
+}
+
+.recent-op small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -232,6 +255,15 @@ h1 {
   border-bottom: 0;
 }
 
+.table tbody tr.table-row-highlight {
+  background: rgba(53,107,92,.08);
+}
+
+.table td.balance-highlight {
+  color: var(--ok);
+  font-weight: 700;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -308,6 +340,7 @@ h1 {
   </header>
 
   <p id="statusLine" class="status-line">等待连接。</p>
+  <div id="recentOp" class="recent-op" aria-live="polite"></div>
 
   <section class="grid" aria-label="关键指标">
     <div class="metric"><span>Gallery</span><strong id="galleryTotal">-</strong><small id="galleryMeta">生成记录</small></div>
@@ -396,6 +429,7 @@ const tokenInput = document.getElementById('adminToken');
 const rememberBtn = document.getElementById('rememberBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const statusLine = document.getElementById('statusLine');
+const recentOp = document.getElementById('recentOp');
 const grantForm = document.getElementById('grantForm');
 const grantBtn = document.getElementById('grantBtn');
 const grantEmailForm = document.getElementById('grantEmailForm');
@@ -417,6 +451,8 @@ const metricEls = {
   codesMeta: document.getElementById('codesMeta'),
   configBadge: document.getElementById('configBadge'),
 };
+
+let recentOperation = null;
 
 tokenInput.value = sessionStorage.getItem('adminToken') || '';
 
@@ -451,6 +487,27 @@ async function api(path, options = {}) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString('zh-CN');
+}
+
+function renderRecentOperation() {
+  if (!recentOp) return;
+  if (!recentOperation) {
+    recentOp.className = 'recent-op';
+    recentOp.innerHTML = '';
+    return;
+  }
+
+  const targetLabel = recentOperation.email
+    ? `邮箱 ${escapeHtml(recentOperation.email)}`
+    : `钱包 ${escapeHtml(recentOperation.userToken || '-')}`;
+  const createdHint = recentOperation.createdUserToken
+    ? `已自动创建钱包 token：${escapeHtml(recentOperation.createdUserToken)}`
+    : '使用现有钱包完成补偿。';
+  recentOp.className = 'recent-op is-visible';
+  recentOp.innerHTML = `
+    <div>最近操作：已向 <strong>${targetLabel}</strong> 补偿 <strong>${formatNumber(recentOperation.creditsAdded)}</strong> credits，当前可用余额 <strong>${formatNumber(recentOperation.availableCredits)}</strong>。</div>
+    <small>${createdHint} · ${escapeHtml(new Date(recentOperation.at).toLocaleString('zh-CN'))}</small>
+  `;
 }
 
 function statusClass(status) {
@@ -516,17 +573,20 @@ function renderEmailUsers(users, total) {
     return;
   }
 
-  const rows = users.map((user) => `
-    <tr>
+  const rows = users.map((user) => {
+    const isRecent = Boolean(recentOperation && recentOperation.email && recentOperation.email === user.email);
+    return `
+    <tr class="${isRecent ? 'table-row-highlight' : ''}">
       <td class="mono">${escapeHtml(user.id || '-')}</td>
       <td>${escapeHtml(user.email || '-')}</td>
       <td>${escapeHtml(user.status || 'active')}</td>
       <td>${user.wallet && user.wallet.linked ? `<span class="badge ok">已关联</span>` : `<span class="badge">未关联</span>`}</td>
-      <td>${escapeHtml(user.wallet ? `${formatNumber(user.wallet.available_credits || 0)} / ${formatNumber(user.wallet.reserved_credits || 0)}` : '0 / 0')}</td>
+      <td class="${isRecent ? 'balance-highlight' : ''}">${escapeHtml(user.wallet ? `${formatNumber(user.wallet.available_credits || 0)} / ${formatNumber(user.wallet.reserved_credits || 0)}` : '0 / 0')}</td>
       <td>${escapeHtml(user.last_login_at ? new Date(user.last_login_at).toLocaleString('zh-CN') : '-')}</td>
       <td>${escapeHtml(user.email_verified_at ? new Date(user.email_verified_at).toLocaleString('zh-CN') : '-')}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   emailUsersTableWrap.innerHTML = `
     <table class="table">
@@ -598,6 +658,8 @@ rememberBtn.addEventListener('click', () => {
   setStatus('已保存到本次浏览器会话。', 'ok');
 });
 
+renderRecentOperation();
+
 refreshBtn.addEventListener('click', loadOverview);
 emailUsersSearchBtn.addEventListener('click', loadEmailUsers);
 emailUsersQuery.addEventListener('keydown', (event) => {
@@ -633,6 +695,15 @@ grantForm.addEventListener('submit', async (event) => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ user_token: userToken, credits, note }),
     });
+    recentOperation = {
+      userToken,
+      email: null,
+      creditsAdded: data.credits_added,
+      availableCredits: data.wallet.available_credits,
+      createdUserToken: null,
+      at: Date.now(),
+    };
+    renderRecentOperation();
     setStatus(`已补偿 ${data.credits_added} credits，可用余额 ${data.wallet.available_credits}。`, 'ok');
     await loadOverview();
     grantForm.reset();
@@ -670,6 +741,16 @@ grantEmailForm.addEventListener('submit', async (event) => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email, credits, note }),
     });
+    recentOperation = {
+      userToken: data.created_user_token || null,
+      email: data.email,
+      creditsAdded: data.credits_added,
+      availableCredits: data.wallet.available_credits,
+      createdUserToken: data.created_user_token || null,
+      at: Date.now(),
+    };
+    emailUsersQuery.value = data.email;
+    renderRecentOperation();
     const createdHint = data.wallet_user_created && data.created_user_token
       ? `（已创建钱包 user_token: ${data.created_user_token}）`
       : '';
