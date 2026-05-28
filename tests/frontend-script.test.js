@@ -121,6 +121,33 @@ test('admin page renderAuditLogs renders newest entries and escapes detail', () 
   assert.equal(auditTableWrap.innerHTML.includes('<unsafe>'), false);
 });
 
+test('admin page loadAuditLogs sends selected action filter', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const loadAuditLogsMatch = html.match(/async function loadAuditLogs\(\) \{[\s\S]*?\n\}/);
+  assert.ok(loadAuditLogsMatch, 'expected async loadAuditLogs function in admin.html');
+
+  const calls = [];
+  const context = vm.createContext({
+    auditMeta: { textContent: '', className: '' },
+    auditTableWrap: { innerHTML: '' },
+    auditActionFilter: { value: 'admin_credits_grant_by_email' },
+    auditRefreshBtn: { disabled: false },
+    escapeHtml(value) { return String(value); },
+    renderAuditLogs() {},
+    getAdminToken() { return 'admin-secret'; },
+    api(path) {
+      calls.push(path);
+      return Promise.resolve({ entries: [], total: 0 });
+    },
+  });
+
+  vm.runInContext(`${loadAuditLogsMatch[0]}; globalThis.loadAuditLogs = loadAuditLogs;`, context);
+  await context.loadAuditLogs();
+
+  assert.equal(calls[0], '/api/admin/audit-logs?limit=12&action=admin_credits_grant_by_email');
+  assert.equal(context.auditRefreshBtn.disabled, false);
+});
+
 test('index page parseCooldownSeconds parses retry seconds safely', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
   const fnSource = extractFunctionSource(html, 'parseCooldownSeconds');

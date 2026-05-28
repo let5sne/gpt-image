@@ -755,6 +755,29 @@ test('GET /api/admin/audit-logs requires admin token and returns recent entries'
   assert.deepEqual(auditLogs.body.data.entries[0].detail, { credits: 20, email_hash: 'hash-1' });
 });
 
+test('GET /api/admin/audit-logs filters by action', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const auditFile = path.join(createTempDir(), 'admin-audit.log');
+  process.env.ADMIN_AUDIT_LOG_FILE = auditFile;
+  fs.writeFileSync(auditFile, [
+    JSON.stringify({ ts: '2026-05-28T10:00:00.000Z', action: 'admin_credits_grant', request_id: 'req-1', detail: { credits: 10 } }),
+    JSON.stringify({ ts: '2026-05-28T10:05:00.000Z', action: 'admin_redemption_batch_create', request_id: 'req-2', detail: { code_count: 2 } }),
+    JSON.stringify({ ts: '2026-05-28T10:10:00.000Z', action: 'admin_credits_grant_by_email', request_id: 'req-3', detail: { credits: 20 } }),
+  ].join('\n') + '\n', 'utf-8');
+
+  const app = loadFreshApp();
+  const auditLogs = await request(app)
+    .get('/api/admin/audit-logs')
+    .set('x-admin-token', 'admin-secret')
+    .query({ limit: 10, action: 'admin_credits_grant' });
+
+  assert.equal(auditLogs.status, 200);
+  assert.equal(auditLogs.body.data.total, 1);
+  assert.equal(auditLogs.body.data.entries.length, 1);
+  assert.equal(auditLogs.body.data.entries[0].action, 'admin_credits_grant');
+});
+
 test('POST /api/admin/credits/grant requires admin token and grants credits to an existing wallet', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';

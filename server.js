@@ -782,7 +782,7 @@ function appendAdminAudit(action, req, detail = {}) {
   }
 }
 
-function readAdminAuditEntries(limit = 20) {
+function readAdminAuditEntries(limit = 20, action = '') {
   if (!ENABLE_LOCAL_STORAGE) {
     return {
       total: 0,
@@ -812,6 +812,7 @@ function readAdminAuditEntries(limit = 20) {
         }
       })
       .filter(Boolean)
+      .filter((entry) => !action || String(entry.action || '') === action)
       .sort((left, right) => (toTimeOrZero(right.ts) - toTimeOrZero(left.ts)));
 
     return {
@@ -2041,7 +2042,10 @@ app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
 app.get('/api/admin/audit-logs', requireAdminAuth, (req, res) => {
   const limitRaw = Number(req.query && req.query.limit);
   const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 20;
-  return sendOk(res, req, readAdminAuditEntries(limit));
+  const action = req.query && typeof req.query.action === 'string'
+    ? req.query.action.trim()
+    : '';
+  return sendOk(res, req, readAdminAuditEntries(limit, action));
 });
 
 app.get('/api/admin/email-users', requireAdminAuth, (req, res) => {

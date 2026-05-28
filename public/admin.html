@@ -302,6 +302,22 @@ h1 {
   line-height: 1.45;
 }
 
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-actions select {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--ink);
+}
+
 .audit-detail {
   max-width: 100%;
   white-space: pre-wrap;
@@ -375,7 +391,17 @@ h1 {
       <section class="section">
         <div class="section-head">
           <h2>最近审计记录</h2>
-          <span id="auditMeta" class="badge">未加载</span>
+          <div class="inline-actions">
+            <select id="auditActionFilter" aria-label="筛选审计动作">
+              <option value="">全部动作</option>
+              <option value="admin_credits_grant">按 user_token 补偿</option>
+              <option value="admin_credits_grant_by_email">按邮箱补偿</option>
+              <option value="admin_redemption_batch_create">批量发码</option>
+              <option value="admin_redemption_code_revoke">撤销兑换码</option>
+            </select>
+            <button id="auditRefreshBtn" type="button">刷新审计</button>
+            <span id="auditMeta" class="badge">未加载</span>
+          </div>
         </div>
         <div class="section-body" id="auditTableWrap">
           <div class="empty">暂无数据</div>
@@ -458,6 +484,8 @@ const grantBtn = document.getElementById('grantBtn');
 const grantEmailForm = document.getElementById('grantEmailForm');
 const grantEmailBtn = document.getElementById('grantEmailBtn');
 const jobsTableWrap = document.getElementById('jobsTableWrap');
+const auditActionFilter = document.getElementById('auditActionFilter');
+const auditRefreshBtn = document.getElementById('auditRefreshBtn');
 const auditMeta = document.getElementById('auditMeta');
 const auditTableWrap = document.getElementById('auditTableWrap');
 const emailUsersMeta = document.getElementById('emailUsersMeta');
@@ -693,13 +721,17 @@ async function loadAuditLogs() {
     return;
   }
 
+  auditRefreshBtn.disabled = true;
   try {
-    const data = await api('/api/admin/audit-logs?limit=12');
+    const action = auditActionFilter && auditActionFilter.value ? `&action=${encodeURIComponent(auditActionFilter.value)}` : '';
+    const data = await api(`/api/admin/audit-logs?limit=12${action}`);
     renderAuditLogs(data.entries || [], data.total || 0);
   } catch (err) {
     auditMeta.textContent = '加载失败';
     auditMeta.className = 'badge bad';
     auditTableWrap.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+  } finally {
+    auditRefreshBtn.disabled = false;
   }
 }
 
@@ -737,6 +769,8 @@ rememberBtn.addEventListener('click', () => {
 renderRecentOperation();
 
 refreshBtn.addEventListener('click', loadOverview);
+auditRefreshBtn.addEventListener('click', loadAuditLogs);
+auditActionFilter.addEventListener('change', loadAuditLogs);
 emailUsersSearchBtn.addEventListener('click', loadEmailUsers);
 emailUsersQuery.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {

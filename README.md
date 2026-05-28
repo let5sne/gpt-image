@@ -171,6 +171,12 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/metrics
 curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/audit-logs?limit=20"
 ```
 
+按动作筛选：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/audit-logs?limit=20&action=admin_credits_grant_by_email"
+```
+
 该接口返回最近的管理员审计记录，包含：
 
 - `action`
@@ -178,7 +184,11 @@ curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/audit-log
 - `ts`
 - `detail`
 
-浏览器后台 [public/admin.html](public/admin.html) 也会同步展示“最近审计记录”面板，便于运营直接核对最近一次补偿、批量发码或撤销动作。
+浏览器后台 [public/admin.html](public/admin.html) 也会同步展示“最近审计记录”面板，并支持：
+
+- 按动作筛选审计记录
+- 独立刷新审计面板
+- 快速核对最近一次补偿、批量发码或撤销动作
 
 ### 管理员邮箱用户查询
 
