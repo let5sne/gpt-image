@@ -253,6 +253,42 @@ test('index page parseCooldownSeconds parses retry seconds safely', () => {
   assert.equal(parseCooldownSeconds('0 秒后重试'), 0);
 });
 
+test('index page setAuthStatus updates status text and visual state', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
+  const fnSource = extractFunctionSource(html, 'setAuthStatus');
+
+  const authStatus = { textContent: '', className: '' };
+  const context = vm.createContext({
+    document: {
+      getElementById(id) {
+        return id === 'authStatus' ? authStatus : null;
+      },
+    },
+  });
+
+  vm.runInContext(`${fnSource}; globalThis.setAuthStatus = setAuthStatus;`, context);
+
+  context.setAuthStatus('已登录：user@example.com', 'ok');
+  assert.equal(authStatus.textContent, '已登录：user@example.com');
+  assert.equal(authStatus.className, 'helper-note auth-status is-ok');
+
+  context.setAuthStatus('登录已失效，请重新登录。', 'warn');
+  assert.equal(authStatus.className, 'helper-note auth-status is-warn');
+
+  context.setAuthStatus('已登出。');
+  assert.equal(authStatus.className, 'helper-note auth-status');
+});
+
+test('index page places account login before creation prompt', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
+  const accountIndex = html.indexOf('class="account-panel"');
+  const promptIndex = html.indexOf('for="prompt"');
+
+  assert.notEqual(accountIndex, -1, 'expected account login panel');
+  assert.notEqual(promptIndex, -1, 'expected prompt field label');
+  assert.ok(accountIndex < promptIndex, 'account login should appear before the creation prompt');
+});
+
 test('index page updateAuthActionButtons reflects loading and cooldown states', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
   const setButtonStateSource = extractFunctionSource(html, 'setButtonState');
