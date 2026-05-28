@@ -1104,6 +1104,71 @@ function grantCreditsToUserToken(userToken, credits, note) {
   });
 }
 
+function grantCreditsToEmail(email, credits, note) {
+  return creditsRepository.withLock(() => {
+    if (!EMAIL_AUTH_ENABLED) {
+      return { error: 'email_auth_disabled' };
+    }
+
+    const emailState = readEmailAuthState();
+    cleanupEmailAuthState(emailState);
+    const emailUser = findEmailUserByEmail(emailState, email);
+    if (!emailUser) {
+      return { error: 'email_user_not_found' };
+    }
+
+    const state = creditsRepository.readState();
+    const linkedUsers = (state.users || [])
+      .filter((item) => item.email_user_id === emailUser.id)
+      .sort((left, right) => toTimeOrZero(right.updated_at) - toTimeOrZero(left.updated_at));
+
+    let user = linkedUsers[0] || null;
+    let createdUserToken = null;
+    const now = new Date().toISOString();
+
+    if (!user) {
+      createdUserToken = createPublicToken();
+      user = {
+        id: crypto.randomUUID(),
+        user_token_hash: hashSecret(createdUserToken),
+        email_user_id: emailUser.id,
+        status: 'active',
+        created_at: now,
+        updated_at: now,
+      };
+      state.users.push(user);
+    }
+
+    let account = getAccount(state, user.id);
+    if (!account) {
+      account = {
+        id: crypto.randomUUID(),
+        user_id: user.id,
+        available_credits: 0,
+        reserved_credits: 0,
+        created_at: now,
+        updated_at: now,
+      };
+      state.accounts.push(account);
+    }
+
+    user.email_user_id = user.email_user_id || emailUser.id;
+    user.updated_at = now;
+    account.available_credits += credits;
+    account.updated_at = now;
+    appendLedger(state, user.id, 'admin_grant', credits, account, { note });
+    creditsRepository.writeState(state);
+
+    return {
+      wallet: serializeWallet(state, user.id),
+      wallet_user_created: Boolean(createdUserToken),
+      created_user_token: createdUserToken,
+      wallet_user_id: user.id,
+      email_user: serializeEmailUser(emailUser),
+    };
+  });
+}
+
 function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt }) {
   return creditsRepository.withLock(() => {
     const state = creditsRepository.readState();
@@ -1993,6 +2058,54 @@ app.post('/api/admin/credits/grant', requireAdminAuth, async (req, res) => {
   return sendOk(res, req, {
     credits_added: credits,
     wallet,
+  });
+});
+
+app.post('/api/admin/credits/grant-by-email', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  if (!EMAIL_AUTH_ENABLED) {
+    return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
+  }
+
+  const email = normalizeEmail(req.body && typeof req.body.email === 'string' ? req.body.email : '');
+  const credits = req.body ? req.body.credits : null;
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : 'admin grant by email';
+
+  if (!isValidEmail(email)) {
+    return sendError(res, req, 400, 'invalid_email', 'email is invalid');
+  }
+  if (!Number.isInteger(credits) || credits < 1 || credits > ADMIN_GRANT_MAX_CREDITS) {
+    return sendError(res, req, 400, 'invalid_credits', `credits must be an integer between 1 and ${ADMIN_GRANT_MAX_CREDITS}`);
+  }
+
+  const granted = await grantCreditsToEmail(email, credits, note || 'admin grant by email');
+  if (granted && granted.error === 'email_user_not_found') {
+    return sendError(res, req, 404, 'email_user_not_found', 'email user not found');
+  }
+
+  log('info', 'admin_credits_granted_by_email', {
+    request_id: req.requestId,
+    credits,
+    email_hash: sha256Hex(email).slice(0, 12),
+    note_hash: sha256Hex(note || 'admin grant by email').slice(0, 12),
+    wallet_user_created: Boolean(granted && granted.wallet_user_created),
+  });
+  appendAdminAudit('admin_credits_grant_by_email', req, {
+    credits,
+    email_hash: sha256Hex(email).slice(0, 12),
+    note_hash: sha256Hex(note || 'admin grant by email').slice(0, 12),
+    wallet_user_created: Boolean(granted && granted.wallet_user_created),
+  });
+
+  return sendOk(res, req, {
+    email,
+    credits_added: credits,
+    wallet: granted.wallet,
+    wallet_user_id: granted.wallet_user_id,
+    wallet_user_created: granted.wallet_user_created,
+    created_user_token: granted.created_user_token,
   });
 });
 

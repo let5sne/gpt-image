@@ -350,6 +350,23 @@ h1 {
           </div>
           <button id="grantBtn" type="submit" class="primary">补偿 credits</button>
         </form>
+        <form id="grantEmailForm" class="form-grid" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+          <label>
+            Email
+            <input id="grantEmail" name="email" autocomplete="off" placeholder="user@example.com" required />
+          </label>
+          <div class="split">
+            <label>
+              Credits
+              <input id="grantEmailCredits" name="credits" type="number" min="1" max="10000" step="1" inputmode="numeric" required />
+            </label>
+            <label>
+              Note
+              <input id="grantEmailNote" name="note" maxlength="200" placeholder="support adjustment by email" />
+            </label>
+          </div>
+          <button id="grantEmailBtn" type="submit">按邮箱补偿</button>
+        </form>
       </div>
     </aside>
   </div>
@@ -381,6 +398,8 @@ const refreshBtn = document.getElementById('refreshBtn');
 const statusLine = document.getElementById('statusLine');
 const grantForm = document.getElementById('grantForm');
 const grantBtn = document.getElementById('grantBtn');
+const grantEmailForm = document.getElementById('grantEmailForm');
+const grantEmailBtn = document.getElementById('grantEmailBtn');
 const jobsTableWrap = document.getElementById('jobsTableWrap');
 const emailUsersMeta = document.getElementById('emailUsersMeta');
 const emailUsersQuery = document.getElementById('emailUsersQuery');
@@ -621,6 +640,46 @@ grantForm.addEventListener('submit', async (event) => {
     setStatus(err.message, 'error');
   } finally {
     grantBtn.disabled = false;
+  }
+});
+
+grantEmailForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!getAdminToken()) {
+    setStatus('需要 ADMIN_TOKEN。', 'error');
+    return;
+  }
+
+  const email = document.getElementById('grantEmail').value.trim().toLowerCase();
+  const credits = Number(document.getElementById('grantEmailCredits').value);
+  const note = document.getElementById('grantEmailNote').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    setStatus('Email 格式无效。', 'error');
+    return;
+  }
+  if (!Number.isInteger(credits) || credits < 1 || credits > 10000) {
+    setStatus('Credits 必须是 1 到 10000 的整数。', 'error');
+    return;
+  }
+
+  grantEmailBtn.disabled = true;
+  setStatus('按邮箱补偿中...');
+  try {
+    const data = await api('/api/admin/credits/grant-by-email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, credits, note }),
+    });
+    const createdHint = data.wallet_user_created && data.created_user_token
+      ? `（已创建钱包 user_token: ${data.created_user_token}）`
+      : '';
+    setStatus(`已向 ${data.email} 补偿 ${data.credits_added} credits，可用余额 ${data.wallet.available_credits}。${createdHint}`, 'ok');
+    await loadOverview();
+    grantEmailForm.reset();
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    grantEmailBtn.disabled = false;
   }
 });
 

@@ -770,6 +770,56 @@ test('POST /api/admin/credits/grant requires admin token and grants credits to a
   assert.equal(stringCredits.status, 400);
 });
 
+test('POST /api/admin/credits/grant-by-email grants credits and creates wallet if needed', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_CODE_DEV_MODE = 'true';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const sendCode = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'ops@example.com' });
+  const verify = await request(app)
+    .post('/api/auth/email/verify-code')
+    .send({ email: 'ops@example.com', code: sendCode.body.data.dev_code });
+  assert.equal(verify.status, 200);
+
+  const unauthorized = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .send({ email: 'ops@example.com', credits: 20 });
+  assert.equal(unauthorized.status, 401);
+
+  const granted = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'ops@example.com', credits: 20, note: 'email grant' });
+  assert.equal(granted.status, 200);
+  assert.equal(granted.body.success, true);
+  assert.equal(granted.body.data.email, 'ops@example.com');
+  assert.equal(granted.body.data.credits_added, 20);
+  assert.equal(granted.body.data.wallet.available_credits, 20);
+  assert.equal(typeof granted.body.data.wallet_user_id, 'string');
+
+  const users = await request(app)
+    .get('/api/admin/email-users')
+    .set('x-admin-token', 'admin-secret');
+  const ops = users.body.data.users.find((item) => item.email === 'ops@example.com');
+  assert.ok(ops);
+  assert.equal(ops.wallet.linked, true);
+  assert.equal(ops.wallet.available_credits, 20);
+
+  const missing = await request(app)
+    .post('/api/admin/credits/grant-by-email')
+    .set('x-admin-token', 'admin-secret')
+    .send({ email: 'missing@example.com', credits: 20 });
+  assert.equal(missing.status, 404);
+});
+
 test('admin redemption APIs create batches, list redacted codes, and revoke active codes', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';
