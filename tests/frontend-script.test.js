@@ -121,6 +121,38 @@ test('admin page renderAuditLogs renders newest entries and escapes detail', () 
   assert.equal(auditTableWrap.innerHTML.includes('<unsafe>'), false);
 });
 
+test('admin page renderErrorSummary renders top errors and request totals', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const escapeHtmlMatch = html.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  assert.ok(escapeHtmlMatch, 'expected escapeHtml function in admin.html');
+
+  const formatNumberSource = extractFunctionSource(html, 'formatNumber');
+  const renderErrorSummarySource = extractFunctionSource(html, 'renderErrorSummary');
+
+  const errorSummaryWrap = { innerHTML: '' };
+  const errorMeta = { textContent: '', className: '' };
+
+  const context = vm.createContext({ errorSummaryWrap, errorMeta });
+  vm.runInContext(`
+    ${escapeHtmlMatch[0]}
+    ${formatNumberSource}
+    ${renderErrorSummarySource}
+    globalThis.renderErrorSummary = renderErrorSummary;
+  `, context);
+
+  context.renderErrorSummary({
+    errors_total: 3,
+    requests_total: 18,
+    error_codes: { unauthorized: 2, invalid_email: 1 },
+    by_path: { 'GET /api/admin/metrics': 4, 'POST /api/auth/email/send-code': 3 },
+  });
+
+  assert.equal(errorMeta.textContent, '错误 3 / 请求 18');
+  assert.equal(errorMeta.className, 'badge bad');
+  assert.ok(errorSummaryWrap.innerHTML.includes('unauthorized'));
+  assert.ok(errorSummaryWrap.innerHTML.includes('GET /api/admin/metrics'));
+});
+
 test('admin page loadAuditLogs sends selected action filter', async () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
   const loadAuditLogsMatch = html.match(/async function loadAuditLogs\(\) \{[\s\S]*?\n\}/);

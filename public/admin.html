@@ -354,6 +354,29 @@ h1 {
   word-break: break-word;
 }
 
+.signal-list {
+  display: grid;
+  gap: 10px;
+}
+
+.signal-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.9);
+}
+
+.signal-card strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: .92rem;
+}
+
+.signal-card small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 @media (max-width: 920px) {
   .topbar,
   .main,
@@ -415,6 +438,16 @@ h1 {
           <span id="configBadge" class="badge">未连接</span>
         </div>
         <div class="section-body" id="jobsTableWrap">
+          <div class="empty">暂无数据</div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>最近异常</h2>
+          <span id="errorMeta" class="badge">未加载</span>
+        </div>
+        <div class="section-body" id="errorSummaryWrap">
           <div class="empty">暂无数据</div>
         </div>
       </section>
@@ -516,6 +549,8 @@ const grantBtn = document.getElementById('grantBtn');
 const grantEmailForm = document.getElementById('grantEmailForm');
 const grantEmailBtn = document.getElementById('grantEmailBtn');
 const jobsTableWrap = document.getElementById('jobsTableWrap');
+const errorMeta = document.getElementById('errorMeta');
+const errorSummaryWrap = document.getElementById('errorSummaryWrap');
 const auditActionFilter = document.getElementById('auditActionFilter');
 const auditRefreshBtn = document.getElementById('auditRefreshBtn');
 const auditMeta = document.getElementById('auditMeta');
@@ -645,6 +680,51 @@ function renderJobs(jobs) {
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+function renderErrorSummary(metrics) {
+  if (!metrics || typeof metrics !== 'object') {
+    errorSummaryWrap.innerHTML = '<div class="empty">暂无错误数据</div>';
+    errorMeta.textContent = '未加载';
+    errorMeta.className = 'badge';
+    return;
+  }
+
+  const totalErrors = Number(metrics.errors_total || 0);
+  const totalRequests = Number(metrics.requests_total || 0);
+  const topCodes = Object.entries(metrics.error_codes || {})
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
+  const topPaths = Object.entries(metrics.by_path || {})
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
+
+  if (totalErrors === 0) {
+    errorSummaryWrap.innerHTML = '<div class="empty">当前没有累计错误，运行状态正常。</div>';
+    errorMeta.textContent = `错误 0 / 请求 ${formatNumber(totalRequests)}`;
+    errorMeta.className = 'badge ok';
+    return;
+  }
+
+  const codeItems = topCodes.length > 0
+    ? topCodes.map(([code, count]) => `<div class="signal-card"><strong>${escapeHtml(code)}</strong><small>累计 ${formatNumber(count)} 次</small></div>`).join('')
+    : '<div class="signal-card"><strong>暂无错误码</strong><small>还没有可展示的错误码聚合。</small></div>';
+  const pathItems = topPaths.length > 0
+    ? topPaths.map(([pathKey, count]) => `<div class="signal-card"><strong class="mono">${escapeHtml(pathKey)}</strong><small>累计 ${formatNumber(count)} 次请求，可结合错误码排查。</small></div>`).join('')
+    : '<div class="signal-card"><strong>暂无路径统计</strong><small>还没有可展示的路径聚合。</small></div>';
+
+  errorSummaryWrap.innerHTML = `
+    <div class="signal-list">
+      <div class="signal-card">
+        <strong>累计错误 ${formatNumber(totalErrors)}</strong>
+        <small>总请求 ${formatNumber(totalRequests)}。优先关注下方高频错误码和高频请求路径。</small>
+      </div>
+      ${codeItems}
+      ${pathItems}
+    </div>
+  `;
+  errorMeta.textContent = `错误 ${formatNumber(totalErrors)} / 请求 ${formatNumber(totalRequests)}`;
+  errorMeta.className = 'badge bad';
 }
 
 function renderAuditLogs(entries, total) {
@@ -786,6 +866,24 @@ async function loadAuditLogs() {
   }
 }
 
+async function loadMetrics() {
+  if (!getAdminToken()) {
+    errorMeta.textContent = '需要 token';
+    errorMeta.className = 'badge bad';
+    errorSummaryWrap.innerHTML = '<div class="empty">请输入 ADMIN_TOKEN</div>';
+    return;
+  }
+
+  try {
+    const data = await api('/api/admin/metrics');
+    renderErrorSummary(data);
+  } catch (err) {
+    errorMeta.textContent = '加载失败';
+    errorMeta.className = 'badge bad';
+    errorSummaryWrap.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
 async function loadOverview() {
   if (!getAdminToken()) {
     setStatus('需要 ADMIN_TOKEN。', 'error');
@@ -805,6 +903,7 @@ async function loadOverview() {
   try {
     const data = await api('/api/admin/overview');
     renderOverview(data);
+    await loadMetrics();
     await loadAuditLogs();
     await loadEmailUsers();
     setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
@@ -820,6 +919,8 @@ async function loadOverview() {
       });
       metricEls.configBadge.textContent = '未配置';
       metricEls.configBadge.className = 'badge bad';
+      errorMeta.textContent = '未配置';
+      errorMeta.className = 'badge bad';
       auditMeta.textContent = '未配置';
       auditMeta.className = 'badge bad';
       emailUsersMeta.textContent = '未配置';
