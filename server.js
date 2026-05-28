@@ -15,6 +15,7 @@ const IMAGE_STORAGE_PUBLIC_BASE_URL = (process.env.IMAGE_STORAGE_PUBLIC_BASE_URL
 const IMAGE_STORAGE_PREFIX = (process.env.IMAGE_STORAGE_PREFIX || '').trim().replace(/^\/+|\/+$/g, '');
 const IMAGE_STORAGE_UPLOAD_TIMEOUT_MS = Number(process.env.IMAGE_STORAGE_UPLOAD_TIMEOUT_MS || 30000);
 const AUTH_TOKEN = process.env.APP_ACCESS_TOKEN || '';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === 'true' || IS_VERCEL;
 const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || 'openai').trim().toLowerCase();
 
@@ -258,6 +259,14 @@ function deletePersistedJob(jobId) {
 
 function isTerminalJobStatus(status) {
   return ['succeeded', 'failed', 'canceled', 'timed_out'].includes(status);
+}
+
+function countBy(items, getKey) {
+  return items.reduce((acc, item) => {
+    const key = getKey(item) || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
 }
 
 function normalizeOutputExtension(outputFormat) {
@@ -977,6 +986,12 @@ function readTokenFromRequest(req) {
   return auth.slice(7).trim();
 }
 
+function readAdminTokenFromRequest(req) {
+  const headerToken = req.headers['x-admin-token'];
+  if (headerToken && typeof headerToken === 'string') return headerToken.trim();
+  return readTokenFromRequest(req);
+}
+
 function sameToken(a, b) {
   if (!a || !b) return false;
   const aBuf = Buffer.from(String(a));
@@ -1014,6 +1029,84 @@ function requireAuth(req, res, next) {
     return sendError(res, req, 401, 'unauthorized', 'missing or invalid access token');
   }
   return next();
+}
+
+function requireAdminAuth(req, res, next) {
+  if (!ADMIN_TOKEN) {
+    return sendError(res, req, 503, 'admin_not_configured', 'admin access is not configured');
+  }
+  const token = readAdminTokenFromRequest(req);
+  if (!sameToken(token, ADMIN_TOKEN)) {
+    return sendError(res, req, 401, 'unauthorized', 'missing or invalid admin token');
+  }
+  return next();
+}
+
+function getStoredJobItems() {
+  const byId = new Map();
+  for (const item of readStoredJobs()) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  for (const item of jobs.values()) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  return [...byId.values()];
+}
+
+function buildAdminOverview() {
+  const gallery = readMeta();
+  const jobItems = getStoredJobItems();
+  const creditState = readCreditsState();
+  const accounts = creditState.accounts || [];
+  const codes = creditState.redemption_codes || [];
+
+  return {
+    config: {
+      provider: IMAGE_PROVIDER,
+      image_storage_provider: IMAGE_STORAGE_PROVIDER,
+      credits_enabled: CREDITS_ENABLED,
+      auth_required: AUTH_REQUIRED,
+      local_storage_enabled: ENABLE_LOCAL_STORAGE,
+      has_required_env: missingEnv.length === 0,
+    },
+    gallery: {
+      total: gallery.length,
+      recent: gallery.slice(-10).reverse(),
+    },
+    jobs: {
+      total: jobItems.length,
+      by_status: countBy(jobItems, (item) => item.status),
+      recent: jobItems
+        .slice()
+        .sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0))
+        .slice(0, 10)
+        .map((item) => ({
+          job_id: item.id,
+          prediction_id: item.predictionId || null,
+          status: item.status || null,
+          prompt: item.prompt || null,
+          size: item.size || null,
+          request_id: item.requestId || null,
+          created_at: item.createdAt ? new Date(item.createdAt).toISOString() : null,
+          updated_at: item.updatedAt ? new Date(item.updatedAt).toISOString() : null,
+        })),
+    },
+    credits: {
+      enabled: CREDITS_ENABLED,
+      users: (creditState.users || []).length,
+      accounts: accounts.length,
+      available_credits: accounts.reduce((sum, account) => sum + (account.available_credits || 0), 0),
+      reserved_credits: accounts.reduce((sum, account) => sum + (account.reserved_credits || 0), 0),
+      ledger_entries: (creditState.credit_ledger || []).length,
+      batches: (creditState.redemption_batches || []).length,
+      codes: {
+        total: codes.length,
+        active: codes.filter((item) => item.status === 'active').length,
+        redeemed: codes.filter((item) => item.status === 'redeemed').length,
+        expired: codes.filter((item) => item.expires_at && new Date(item.expires_at).getTime() < Date.now()).length,
+      },
+    },
+  };
 }
 
 // ── 中间件 ──────────────────────────────────────────────
@@ -1061,6 +1154,10 @@ app.get('/api/health', (_req, res) => {
     has_required_env: missingEnv.length === 0,
     has_bypass_secret: IMAGE_API_BYPASS_SECRET.length > 0,
   });
+});
+
+app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
+  return sendOk(res, req, buildAdminOverview());
 });
 
 app.post('/api/redeem', async (req, res) => {

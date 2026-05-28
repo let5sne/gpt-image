@@ -38,6 +38,7 @@ OPENROUTER_IMAGE_API_MODEL=openai/gpt-image-2
 - 统一错误响应：API 返回统一结构，便于前端和日志排查。
 - 请求观测：每个请求带 `x-request-id`，服务端日志记录关键状态。
 - 图片存储可切换：默认本地 `/storage`，生产可配置 S3-compatible 对象存储。
+- 运营只读概览：配置 `ADMIN_TOKEN` 后可查看 gallery、jobs、credits 的脱敏统计。
 - CI 基线：已新增 GitHub Actions，在 push/PR 时运行 `npm test`。
 
 ## 目录
@@ -117,6 +118,22 @@ vercel --prod
 - Vercel 模式下为无状态代理：`/api/generate` 直接返回上游图片 URL，不做本地落盘。
 - 因为无状态，`/api/gallery` 在 Vercel 上返回空数组；本地开发模式才会写入 `storage/metadata.json`。
 - 若要线上保留画廊，建议接入 OSS/S3 + 数据库（或 Vercel Blob + KV）。
+
+## 运营只读概览
+
+配置独立后台 token：
+
+```bash
+ADMIN_TOKEN=replace-with-a-different-strong-random-admin-token
+```
+
+访问：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/overview
+```
+
+该接口返回配置状态、gallery 数量与最近记录、jobs 状态分布、credits 余额与兑换码统计。返回内容会避开 `code_hash`、`user_token_hash` 等敏感字段，只作为内测期查账和排障入口。
 
 ## API
 

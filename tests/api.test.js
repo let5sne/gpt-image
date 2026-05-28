@@ -87,6 +87,7 @@ function setBaseEnv() {
   delete process.env.S3_ACCESS_KEY_ID;
   delete process.env.S3_SECRET_ACCESS_KEY;
   delete process.env.S3_FORCE_PATH_STYLE;
+  delete process.env.ADMIN_TOKEN;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -630,6 +631,61 @@ test('POST /api/generate releases credits when S3 upload fails for b64-only imag
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('GET /api/admin/overview requires admin token and returns redacted operational stats', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+
+  const storageDir = process.env.STORAGE_DIR;
+  fs.mkdirSync(storageDir, { recursive: true });
+  fs.writeFileSync(path.join(storageDir, 'metadata.json'), JSON.stringify([{
+    id: 'image-1',
+    prompt: 'admin prompt',
+    size: '1024x1024',
+    model: 'gpt-image-2',
+    took_ms: 123,
+    local_url: '/storage/image-1.png',
+    remote_url: '/storage/image-1.png',
+    created_at: '2026-05-28T00:00:00.000Z',
+  }], null, 2), 'utf-8');
+  fs.writeFileSync(path.join(storageDir, 'jobs.json'), JSON.stringify([{
+    id: 'job-1',
+    predictionId: 'pred-1',
+    status: 'succeeded',
+    prompt: 'job prompt',
+    size: '1024x1024',
+    requestId: 'req-1',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    images: [],
+  }], null, 2), 'utf-8');
+
+  const app = loadFreshApp();
+
+  const unauthorized = await request(app).get('/api/admin/overview');
+  assert.equal(unauthorized.status, 401);
+
+  const overview = await request(app)
+    .get('/api/admin/overview')
+    .set('x-admin-token', 'admin-secret');
+
+  assert.equal(overview.status, 200);
+  assert.equal(overview.body.success, true);
+  assert.equal(overview.body.data.gallery.total, 1);
+  assert.equal(overview.body.data.jobs.total, 1);
+  assert.equal(overview.body.data.jobs.by_status.succeeded, 1);
+  assert.equal(overview.body.data.credits.users, 0);
+  assert.equal(overview.body.data.credits.codes.active, 1);
+  assert.equal(overview.body.data.credits.codes.redeemed, 0);
+  assert.equal(overview.body.data.config.provider, 'openai');
+  assert.equal(overview.body.data.config.image_storage_provider, 'local');
+  assert.deepEqual(Object.keys(overview.body.data.credits).includes('redemption_codes'), false);
+  assert.equal(JSON.stringify(overview.body.data).includes('code_hash'), false);
+  assert.equal(JSON.stringify(overview.body.data).includes('user_token_hash'), false);
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {
