@@ -313,6 +313,7 @@ test('index page updateAuthActionButtons reflects loading and cooldown states', 
     let verifyCodeInFlight = false;
     let logoutInFlight = false;
     let sendCodeCooldownSeconds = 0;
+    let emailAuthAvailable = true;
     ${setButtonStateSource}
     ${updateSource}
     globalThis.harness = {
@@ -321,6 +322,7 @@ test('index page updateAuthActionButtons reflects loading and cooldown states', 
         if ('verifyCodeInFlight' in next) verifyCodeInFlight = next.verifyCodeInFlight;
         if ('logoutInFlight' in next) logoutInFlight = next.logoutInFlight;
         if ('sendCodeCooldownSeconds' in next) sendCodeCooldownSeconds = next.sendCodeCooldownSeconds;
+        if ('emailAuthAvailable' in next) emailAuthAvailable = next.emailAuthAvailable;
       },
       apply() {
         updateAuthActionButtons();
@@ -346,4 +348,10 @@ test('index page updateAuthActionButtons reflects loading and cooldown states', 
   assert.equal(buttons.verifyCodeBtn.textContent, '登录中...');
   assert.equal(buttons.logoutBtn.disabled, true);
   assert.equal(buttons.logoutBtn.textContent, '登出中...');
+
+  context.harness.setState({ emailAuthAvailable: false, verifyCodeInFlight: false, logoutInFlight: false });
+  context.harness.apply();
+  assert.equal(buttons.sendCodeBtn.disabled, true);
+  assert.equal(buttons.sendCodeBtn.textContent, '暂未开放');
+  assert.equal(buttons.verifyCodeBtn.disabled, true);
 });

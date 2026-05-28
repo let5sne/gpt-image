@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const nodemailer = require('nodemailer');
 
 async function waitFor(check, timeoutMs = 1000) {
   const started = Date.now();
@@ -102,6 +103,14 @@ function setBaseEnv() {
   delete process.env.EMAIL_SESSION_TTL_MS;
   delete process.env.EMAIL_CODE_DEV_MODE;
   delete process.env.EMAIL_AUTH_COOKIE_NAME;
+  delete process.env.EMAIL_SMTP_HOST;
+  delete process.env.EMAIL_SMTP_PORT;
+  delete process.env.EMAIL_SMTP_SECURE;
+  delete process.env.EMAIL_SMTP_USER;
+  delete process.env.EMAIL_SMTP_PASS;
+  delete process.env.EMAIL_FROM;
+  delete process.env.EMAIL_REPLY_TO;
+  delete process.env.EMAIL_BRAND_NAME;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -124,6 +133,9 @@ test('GET /api/health returns mode and env status', async () => {
   assert.equal(res.status, 200);
   assert.equal(typeof res.body.status, 'string');
   assert.equal(typeof res.body.mode, 'string');
+  assert.equal(typeof res.body.email_auth.enabled, 'boolean');
+  assert.equal(typeof res.body.email_auth.delivery_configured, 'boolean');
+  assert.equal(typeof res.body.email_auth.dev_mode, 'boolean');
   assert.equal(typeof res.body.has_required_env, 'boolean');
 });
 
@@ -1081,6 +1093,59 @@ test('email auth flow supports send-code verify me and logout', async () => {
     .get('/api/auth/me')
     .set('x-auth-token', verified.body.data.auth_token);
   assert.equal(meAfterLogout.status, 401);
+});
+
+test('email auth send-code requires delivery when dev mode is disabled', async () => {
+  setBaseEnv();
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  const app = loadFreshApp();
+
+  const sendCode = await request(app)
+    .post('/api/auth/email/send-code')
+    .send({ email: 'user@example.com' });
+
+  assert.equal(sendCode.status, 503);
+  assert.equal(sendCode.body.error.code, 'email_delivery_not_configured');
+});
+
+test('email auth send-code sends SMTP email without exposing dev code', async () => {
+  setBaseEnv();
+  process.env.EMAIL_AUTH_ENABLED = 'true';
+  process.env.EMAIL_AUTH_FILE = path.join(createTempDir(), 'email-auth.json');
+  process.env.EMAIL_SMTP_HOST = 'smtp.example.com';
+  process.env.EMAIL_SMTP_PORT = '587';
+  process.env.EMAIL_FROM = 'Image Studio <noreply@example.com>';
+  process.env.EMAIL_BRAND_NAME = 'Image Studio';
+
+  const originalCreateTransport = nodemailer.createTransport;
+  let transportConfig = null;
+  let sentMail = null;
+  nodemailer.createTransport = (config) => {
+    transportConfig = config;
+    return {
+      async sendMail(message) {
+        sentMail = message;
+        return { messageId: 'test-message' };
+      },
+    };
+  };
+
+  try {
+    const app = loadFreshApp();
+    const sendCode = await request(app)
+      .post('/api/auth/email/send-code')
+      .send({ email: 'user@example.com' });
+
+    assert.equal(sendCode.status, 200);
+    assert.equal(sendCode.body.success, true);
+    assert.equal(sendCode.body.data.dev_code, undefined);
+    assert.equal(transportConfig.host, 'smtp.example.com');
+    assert.equal(sentMail.to, 'user@example.com');
+    assert.match(sentMail.subject, /登录验证码/);
+  } finally {
+    nodemailer.createTransport = originalCreateTransport;
+  }
 });
 
 test('email auth send-code enforces cooldown', async () => {

@@ -1252,6 +1252,7 @@ let verifyCodeInFlight = false;
 let logoutInFlight = false;
 let sendCodeCooldownSeconds = 0;
 let sendCodeCooldownTimer = null;
+let emailAuthAvailable = true;
 
 function setButtonState(buttonId, disabled, text) {
   const btn = document.getElementById(buttonId);
@@ -1294,12 +1295,38 @@ function updateAuthActionButtons() {
   const sendText = sendCodeInFlight
     ? '发送中...'
     : (sendCodeCooldownSeconds > 0 ? `${sendCodeCooldownSeconds}s 后重发` : '发码');
-  setButtonState('sendCodeBtn', sendCodeInFlight || sendCodeCooldownSeconds > 0, sendText);
-  setButtonState('verifyCodeBtn', verifyCodeInFlight, verifyCodeInFlight ? '登录中...' : '登录');
+  setButtonState('sendCodeBtn', !emailAuthAvailable || sendCodeInFlight || sendCodeCooldownSeconds > 0, emailAuthAvailable ? sendText : '暂未开放');
+  setButtonState('verifyCodeBtn', !emailAuthAvailable || verifyCodeInFlight, verifyCodeInFlight ? '登录中...' : '登录');
   setButtonState('logoutBtn', logoutInFlight, logoutInFlight ? '登出中...' : '登出');
 }
 
+function setEmailAuthAvailability(available) {
+  emailAuthAvailable = Boolean(available);
+  ['emailInput', 'emailCodeInput'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (input) input.disabled = !emailAuthAvailable;
+  });
+  if (!emailAuthAvailable) {
+    setAuthStatus('邮箱登录暂未开放，请先使用兑换码增加 credits。');
+  }
+  updateAuthActionButtons();
+}
+
+async function loadPublicConfig() {
+  try {
+    const res = await fetch('/api/health');
+    const config = await res.json();
+    setEmailAuthAvailability(Boolean(config.email_auth && config.email_auth.enabled));
+  } catch (e) {
+    setEmailAuthAvailability(false);
+  }
+}
+
 async function sendEmailCode() {
+  if (!emailAuthAvailable) {
+    setAuthStatus('邮箱登录暂未开放，请先使用兑换码增加 credits。', 'warn');
+    return;
+  }
   if (sendCodeInFlight || sendCodeCooldownSeconds > 0) {
     return;
   }
@@ -1407,9 +1434,14 @@ async function logoutEmailAuth() {
 }
 
 async function loadEmailAuthMe() {
+  if (!emailAuthAvailable) {
+    persistEmailAuthToken('');
+    setAuthStatus('邮箱登录暂未开放，请先使用兑换码增加 credits。');
+    return;
+  }
   const token = getEmailAuthToken();
   if (!token) {
-    setAuthStatus('邮箱登录未启用或尚未登录。');
+    setAuthStatus('尚未登录。');
     return;
   }
   try {
@@ -1948,7 +1980,7 @@ updateEstimatedCost();
 loadWallet();
 loadGallery();
 updateAuthActionButtons();
-loadEmailAuthMe();
+loadPublicConfig().then(() => loadEmailAuthMe());
 </script>
 </body>
 </html>

@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -175,8 +176,17 @@ const EMAIL_CODE_TTL_MS = Number(process.env.EMAIL_CODE_TTL_MS || 10 * 60 * 1000
 const EMAIL_CODE_RESEND_COOLDOWN_MS = Number(process.env.EMAIL_CODE_RESEND_COOLDOWN_MS || 60 * 1000);
 const EMAIL_CODE_MAX_ATTEMPTS = Number(process.env.EMAIL_CODE_MAX_ATTEMPTS || 5);
 const EMAIL_SESSION_TTL_MS = Number(process.env.EMAIL_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
-const EMAIL_CODE_DEV_MODE = process.env.EMAIL_CODE_DEV_MODE !== 'false';
+const EMAIL_CODE_DEV_MODE = process.env.EMAIL_CODE_DEV_MODE === 'true';
 const EMAIL_AUTH_COOKIE_NAME = process.env.EMAIL_AUTH_COOKIE_NAME || 'ims_auth';
+const EMAIL_SMTP_HOST = (process.env.EMAIL_SMTP_HOST || '').trim();
+const EMAIL_SMTP_PORT = Number(process.env.EMAIL_SMTP_PORT || 587);
+const EMAIL_SMTP_SECURE = process.env.EMAIL_SMTP_SECURE === 'true' || EMAIL_SMTP_PORT === 465;
+const EMAIL_SMTP_USER = (process.env.EMAIL_SMTP_USER || '').trim();
+const EMAIL_SMTP_PASS = process.env.EMAIL_SMTP_PASS || '';
+const EMAIL_FROM = (process.env.EMAIL_FROM || '').trim();
+const EMAIL_REPLY_TO = (process.env.EMAIL_REPLY_TO || '').trim();
+const EMAIL_BRAND_NAME = (process.env.EMAIL_BRAND_NAME || 'Image Studio').trim();
+const EMAIL_DELIVERY_CONFIGURED = Boolean(EMAIL_SMTP_HOST && EMAIL_SMTP_PORT && EMAIL_FROM);
 
 if (CREDITS_ENABLED && (!process.env.CREDIT_CODE_PEPPER || CREDIT_CODE_PEPPER === 'change-me')) {
   throw new Error(
@@ -857,6 +867,54 @@ function generateEmailCode() {
   const max = 10 ** EMAIL_CODE_LENGTH;
   const value = crypto.randomInt(0, max);
   return String(value).padStart(EMAIL_CODE_LENGTH, '0');
+}
+
+function createEmailTransporter() {
+  const config = {
+    host: EMAIL_SMTP_HOST,
+    port: EMAIL_SMTP_PORT,
+    secure: EMAIL_SMTP_SECURE,
+  };
+  if (EMAIL_SMTP_USER || EMAIL_SMTP_PASS) {
+    config.auth = {
+      user: EMAIL_SMTP_USER,
+      pass: EMAIL_SMTP_PASS,
+    };
+  }
+  return nodemailer.createTransport(config);
+}
+
+async function sendEmailVerificationCode(email, code) {
+  if (!EMAIL_DELIVERY_CONFIGURED) {
+    const error = new Error('email delivery is not configured');
+    error.code = 'email_delivery_not_configured';
+    throw error;
+  }
+
+  const transporter = createEmailTransporter();
+  const minutes = Math.max(1, Math.floor(EMAIL_CODE_TTL_MS / 60000));
+  const subject = `${EMAIL_BRAND_NAME} 登录验证码`;
+  const text = [
+    `${EMAIL_BRAND_NAME} 登录验证码：${code}`,
+    '',
+    `验证码 ${minutes} 分钟内有效。`,
+    '如果不是你本人操作，请忽略这封邮件。',
+  ].join('\n');
+  const html = [
+    `<p>${EMAIL_BRAND_NAME} 登录验证码：</p>`,
+    `<p style="font-size:24px;font-weight:700;letter-spacing:4px;">${code}</p>`,
+    `<p>验证码 ${minutes} 分钟内有效。</p>`,
+    '<p>如果不是你本人操作，请忽略这封邮件。</p>',
+  ].join('');
+
+  await transporter.sendMail({
+    from: EMAIL_FROM,
+    to: email,
+    replyTo: EMAIL_REPLY_TO || undefined,
+    subject,
+    text,
+    html,
+  });
 }
 
 function parseCookies(req) {
@@ -1839,6 +1897,11 @@ app.get('/api/health', (_req, res) => {
     provider: IMAGE_PROVIDER,
     image_storage_provider: IMAGE_STORAGE_PROVIDER,
     credits_enabled: CREDITS_ENABLED,
+    email_auth: {
+      enabled: EMAIL_AUTH_ENABLED,
+      delivery_configured: EMAIL_DELIVERY_CONFIGURED,
+      dev_mode: EMAIL_CODE_DEV_MODE,
+    },
     has_required_env: missingEnv.length === 0,
     has_bypass_secret: IMAGE_API_BYPASS_SECRET.length > 0,
   });
@@ -1848,13 +1911,16 @@ app.post('/api/auth/email/send-code', async (req, res) => {
   if (!EMAIL_AUTH_ENABLED) {
     return sendError(res, req, 404, 'email_auth_disabled', 'email auth is not enabled');
   }
+  if (!EMAIL_CODE_DEV_MODE && !EMAIL_DELIVERY_CONFIGURED) {
+    return sendError(res, req, 503, 'email_delivery_not_configured', 'email delivery is not configured');
+  }
 
   const email = normalizeEmail(req.body && req.body.email);
   if (!isValidEmail(email)) {
     return sendError(res, req, 400, 'invalid_email', 'email is invalid');
   }
 
-  return withEmailAuthLock(() => {
+  return withEmailAuthLock(async () => {
     const state = readEmailAuthState();
     cleanupEmailAuthState(state);
     const now = Date.now();
@@ -1870,9 +1936,10 @@ app.post('/api/auth/email/send-code', async (req, res) => {
     }
 
     const code = generateEmailCode();
+    const codeId = crypto.randomUUID();
     const nowIsoValue = nowIso();
     state.verification_codes.push({
-      id: crypto.randomUUID(),
+      id: codeId,
       email,
       code_hash: hashEmailAuthSecret(code),
       attempts: 0,
@@ -1881,6 +1948,22 @@ app.post('/api/auth/email/send-code', async (req, res) => {
       used_at: null,
     });
     writeEmailAuthState(state);
+
+    if (EMAIL_DELIVERY_CONFIGURED) {
+      try {
+        await sendEmailVerificationCode(email, code);
+      } catch (err) {
+        state.verification_codes = (state.verification_codes || []).filter((item) => item.id !== codeId);
+        writeEmailAuthState(state);
+        log('error', 'email_auth_delivery_failed', {
+          request_id: req.requestId,
+          email_hash: sha256Hex(email).slice(0, 12),
+          message: err.message,
+          code: err.code || '',
+        });
+        return sendError(res, req, 502, 'email_delivery_failed', 'failed to send verification email');
+      }
+    }
 
     log('info', 'email_auth_code_sent', {
       request_id: req.requestId,
