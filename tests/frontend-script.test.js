@@ -4,6 +4,55 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+function extractFunctionSource(html, name) {
+  const signature = `function ${name}(`;
+  const start = html.indexOf(signature);
+  assert.notEqual(start, -1, `expected ${name} in inline script`);
+
+  const braceStart = html.indexOf('{', start);
+  assert.notEqual(braceStart, -1, `expected opening brace for ${name}`);
+
+  let depth = 0;
+  let inString = false;
+  let stringChar = null;
+  let escaped = false;
+  for (let i = braceStart; i < html.length; i += 1) {
+    const ch = html[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if ((ch === '"' || ch === '\'' || ch === '`') && !inString) {
+      inString = true;
+      stringChar = ch;
+      continue;
+    }
+    if (ch === stringChar && inString) {
+      inString = false;
+      stringChar = null;
+      continue;
+    }
+
+    if (!inString) {
+      if (ch === '{') depth += 1;
+      if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return html.slice(start, i + 1);
+        }
+      }
+    }
+  }
+
+  assert.fail(`expected closing brace for ${name}`);
+}
+
 test('public HTML inline scripts parse without syntax errors', () => {
   const publicDir = path.join(__dirname, '..', 'public');
   const files = fs.readdirSync(publicDir).filter((name) => name.endsWith('.html'));
@@ -33,4 +82,77 @@ test('admin page escapeHtml escapes unsafe markup', () => {
   assert.equal(escapeHtml('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
   assert.equal(escapeHtml('"><img src=x onerror=alert(1)>'), '&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
   assert.equal(escapeHtml('& < > " \''), '&amp; &lt; &gt; &quot; &#39;');
+});
+
+test('index page parseCooldownSeconds parses retry seconds safely', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
+  const fnSource = extractFunctionSource(html, 'parseCooldownSeconds');
+
+  const context = vm.createContext({});
+  vm.runInContext(`${fnSource}; globalThis.parseCooldownSeconds = parseCooldownSeconds;`, context);
+  const parseCooldownSeconds = context.parseCooldownSeconds;
+
+  assert.equal(parseCooldownSeconds('请 60 秒后重试'), 60);
+  assert.equal(parseCooldownSeconds('retry after 15s'), 15);
+  assert.equal(parseCooldownSeconds('稍后重试'), 0);
+  assert.equal(parseCooldownSeconds('0 秒后重试'), 0);
+});
+
+test('index page updateAuthActionButtons reflects loading and cooldown states', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
+  const setButtonStateSource = extractFunctionSource(html, 'setButtonState');
+  const updateSource = extractFunctionSource(html, 'updateAuthActionButtons');
+
+  const buttons = {
+    sendCodeBtn: { disabled: false, textContent: '发码', dataset: {} },
+    verifyCodeBtn: { disabled: false, textContent: '登录', dataset: {} },
+    logoutBtn: { disabled: false, textContent: '登出', dataset: {} },
+  };
+
+  const context = vm.createContext({
+    document: {
+      getElementById(id) {
+        return buttons[id] || null;
+      },
+    },
+  });
+
+  vm.runInContext(`
+    let sendCodeInFlight = false;
+    let verifyCodeInFlight = false;
+    let logoutInFlight = false;
+    let sendCodeCooldownSeconds = 0;
+    ${setButtonStateSource}
+    ${updateSource}
+    globalThis.harness = {
+      setState(next) {
+        if ('sendCodeInFlight' in next) sendCodeInFlight = next.sendCodeInFlight;
+        if ('verifyCodeInFlight' in next) verifyCodeInFlight = next.verifyCodeInFlight;
+        if ('logoutInFlight' in next) logoutInFlight = next.logoutInFlight;
+        if ('sendCodeCooldownSeconds' in next) sendCodeCooldownSeconds = next.sendCodeCooldownSeconds;
+      },
+      apply() {
+        updateAuthActionButtons();
+      },
+    };
+  `, context);
+
+  context.harness.setState({ sendCodeInFlight: true });
+  context.harness.apply();
+  assert.equal(buttons.sendCodeBtn.disabled, true);
+  assert.equal(buttons.sendCodeBtn.textContent, '发送中...');
+
+  context.harness.setState({ sendCodeInFlight: false, sendCodeCooldownSeconds: 12 });
+  context.harness.apply();
+  assert.equal(buttons.sendCodeBtn.disabled, true);
+  assert.equal(buttons.sendCodeBtn.textContent, '12s 后重发');
+
+  context.harness.setState({ sendCodeCooldownSeconds: 0, verifyCodeInFlight: true, logoutInFlight: true });
+  context.harness.apply();
+  assert.equal(buttons.sendCodeBtn.disabled, false);
+  assert.equal(buttons.sendCodeBtn.textContent, '发码');
+  assert.equal(buttons.verifyCodeBtn.disabled, true);
+  assert.equal(buttons.verifyCodeBtn.textContent, '登录中...');
+  assert.equal(buttons.logoutBtn.disabled, true);
+  assert.equal(buttons.logoutBtn.textContent, '登出中...');
 });
