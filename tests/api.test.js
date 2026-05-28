@@ -88,6 +88,7 @@ function setBaseEnv() {
   delete process.env.S3_SECRET_ACCESS_KEY;
   delete process.env.S3_FORCE_PATH_STYLE;
   delete process.env.ADMIN_TOKEN;
+  delete process.env.ADMIN_GRANT_MAX_CREDITS;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -686,6 +687,51 @@ test('GET /api/admin/overview requires admin token and returns redacted operatio
   assert.deepEqual(Object.keys(overview.body.data.credits).includes('redemption_codes'), false);
   assert.equal(JSON.stringify(overview.body.data).includes('code_hash'), false);
   assert.equal(JSON.stringify(overview.body.data).includes('user_token_hash'), false);
+});
+
+test('POST /api/admin/credits/grant requires admin token and grants credits to an existing wallet', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const redeemed = await request(app)
+    .post('/api/redeem')
+    .send({ code: 'TEST-CODE-100' });
+  const userToken = redeemed.body.data.user_token;
+
+  const unauthorized = await request(app)
+    .post('/api/admin/credits/grant')
+    .send({ user_token: userToken, credits: 25, note: 'support adjustment' });
+  assert.equal(unauthorized.status, 401);
+
+  const granted = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('x-admin-token', 'admin-secret')
+    .send({ user_token: userToken, credits: 25, note: 'support adjustment' });
+
+  assert.equal(granted.status, 200);
+  assert.equal(granted.body.success, true);
+  assert.equal(granted.body.data.credits_added, 25);
+  assert.equal(granted.body.data.wallet.available_credits, 125);
+  assert.equal(granted.body.data.wallet.reserved_credits, 0);
+  assert.equal(granted.body.data.wallet.recent_ledger[0].type, 'admin_grant');
+  assert.equal(granted.body.data.wallet.recent_ledger[0].credits_delta, 25);
+  assert.equal(granted.body.data.wallet.recent_ledger[0].note, 'support adjustment');
+
+  const invalid = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('x-admin-token', 'admin-secret')
+    .send({ user_token: userToken, credits: 0 });
+  assert.equal(invalid.status, 400);
+
+  const stringCredits = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('x-admin-token', 'admin-secret')
+    .send({ user_token: userToken, credits: '25' });
+  assert.equal(stringCredits.status, 400);
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {

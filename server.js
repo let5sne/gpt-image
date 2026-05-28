@@ -176,6 +176,7 @@ const CREDIT_COSTS = {
   auto: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_AUTO || 20),
   high: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH || 20),
 };
+const ADMIN_GRANT_MAX_CREDITS = Number(process.env.ADMIN_GRANT_MAX_CREDITS || 10000);
 
 const dailyUsage = new Map();
 const jobs = new Map();
@@ -663,6 +664,23 @@ function releaseCredits(reservation, note = 'generation failed') {
     });
     writeCreditsState(state);
     return serializeWallet(state, reservation.userId);
+  });
+}
+
+function grantCreditsToUserToken(userToken, credits, note) {
+  return withCreditsLock(() => {
+    const state = readCreditsState();
+    const user = findUserByToken(state, userToken);
+    if (!user) return null;
+    const account = getAccount(state, user.id);
+    if (!account) return null;
+
+    account.available_credits += credits;
+    account.updated_at = new Date().toISOString();
+    appendLedger(state, user.id, 'admin_grant', credits, account, { note });
+    writeCreditsState(state);
+
+    return serializeWallet(state, user.id);
   });
 }
 
@@ -1158,6 +1176,39 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
   return sendOk(res, req, buildAdminOverview());
+});
+
+app.post('/api/admin/credits/grant', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+
+  const userToken = req.body && typeof req.body.user_token === 'string' ? req.body.user_token.trim() : '';
+  const credits = req.body ? req.body.credits : null;
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : 'admin grant';
+
+  if (!userToken) {
+    return sendError(res, req, 400, 'invalid_user_token', 'user_token is required');
+  }
+  if (!Number.isInteger(credits) || credits < 1 || credits > ADMIN_GRANT_MAX_CREDITS) {
+    return sendError(res, req, 400, 'invalid_credits', `credits must be an integer between 1 and ${ADMIN_GRANT_MAX_CREDITS}`);
+  }
+
+  const wallet = await grantCreditsToUserToken(userToken, credits, note || 'admin grant');
+  if (!wallet) {
+    return sendError(res, req, 404, 'wallet_not_found', 'wallet not found');
+  }
+
+  log('info', 'admin_credits_granted', {
+    request_id: req.requestId,
+    credits,
+    note_hash: sha256Hex(note || 'admin grant').slice(0, 12),
+  });
+
+  return sendOk(res, req, {
+    credits_added: credits,
+    wallet,
+  });
 });
 
 app.post('/api/redeem', async (req, res) => {

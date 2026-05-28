@@ -135,6 +135,25 @@ curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/overview
 
 该接口返回配置状态、gallery 数量与最近记录、jobs 状态分布、credits 余额与兑换码统计。返回内容会避开 `code_hash`、`user_token_hash` 等敏感字段，只作为内测期查账和排障入口。
 
+### 手动补偿 credits
+
+配置单次补偿上限：
+
+```bash
+ADMIN_GRANT_MAX_CREDITS=10000
+```
+
+给已有钱包补偿 credits：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/credits/grant \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"user_token":"usr_xxx","credits":25,"note":"support adjustment"}'
+```
+
+该接口只接受已存在的 `user_token`，不会自动创建钱包；每次补偿都会写入 `credit_ledger`，类型为 `admin_grant`。
+
 ## API
 
 统一响应格式：
