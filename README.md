@@ -133,6 +133,8 @@ ADMIN_TOKEN=replace-with-a-different-strong-random-admin-token
 curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/overview
 ```
 
+浏览器页面：`http://localhost:3000/admin.html`
+
 该接口返回配置状态、gallery 数量与最近记录、jobs 状态分布、credits 余额与兑换码统计。返回内容会避开 `code_hash`、`user_token_hash` 等敏感字段，只作为内测期查账和排障入口。
 
 ### 手动补偿 credits

@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Image Studio Admin</title>
+<style>
+:root {
+  --bg: #f6f4ef;
+  --panel: #ffffff;
+  --panel-2: #f0eee8;
+  --ink: #1e211c;
+  --muted: #6c7167;
+  --line: #ded8cc;
+  --accent: #356b5c;
+  --accent-2: #b75d38;
+  --danger: #a83c30;
+  --ok: #2d7655;
+  --shadow: 0 18px 50px rgba(52, 45, 32, .12);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.58), rgba(255,255,255,0)),
+    var(--bg);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 14px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink);
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 650;
+}
+
+.shell {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0 56px;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  align-items: end;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: .72rem;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  letter-spacing: 0;
+  line-height: .98;
+}
+
+.token-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.status-line {
+  min-height: 24px;
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: .88rem;
+}
+
+.status-line.error { color: var(--danger); }
+.status-line.ok { color: var(--ok); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  min-height: 120px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 18px;
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.metric small {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, .8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.82);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.section-body {
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  font-size: .86rem;
+}
+
+.table th {
+  color: var(--muted);
+  font-size: .72rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.badge.ok { color: var(--ok); border-color: rgba(45,118,85,.35); }
+.badge.warn { color: var(--accent-2); border-color: rgba(183,93,56,.35); }
+.badge.bad { color: var(--danger); border-color: rgba(168,60,48,.35); }
+
+.empty {
+  padding: 22px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.prompt {
+  max-width: 440px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+@media (max-width: 920px) {
+  .topbar,
+  .main,
+  .token-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .grid,
+  .split {
+    grid-template-columns: 1fr;
+  }
+
+  .table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1>Image Studio Admin</h1>
+    </div>
+    <div class="token-panel">
+      <label>
+        Admin Token
+        <input id="adminToken" type="password" autocomplete="off" placeholder="ADMIN_TOKEN" />
+      </label>
+      <button id="rememberBtn" type="button">本次会话保存</button>
+      <button id="refreshBtn" type="button" class="primary">刷新</button>
+    </div>
+  </header>
+
+  <p id="statusLine" class="status-line">等待连接。</p>
+
+  <section class="grid" aria-label="关键指标">
+    <div class="metric"><span>Gallery</span><strong id="galleryTotal">-</strong><small id="galleryMeta">生成记录</small></div>
+    <div class="metric"><span>Jobs</span><strong id="jobsTotal">-</strong><small id="jobsMeta">任务状态</small></div>
+    <div class="metric"><span>Credits</span><strong id="creditsAvailable">-</strong><small id="creditsMeta">可用 / 冻结</small></div>
+    <div class="metric"><span>Codes</span><strong id="codesActive">-</strong><small id="codesMeta">可兑换 / 已兑换</small></div>
+  </section>
+
+  <div class="main">
+    <section class="section">
+      <div class="section-head">
+        <h2>近期任务</h2>
+        <span id="configBadge" class="badge">未连接</span>
+      </div>
+      <div class="section-body" id="jobsTableWrap">
+        <div class="empty">暂无数据</div>
+      </div>
+    </section>
+
+    <aside class="section">
+      <div class="section-head">
+        <h2>手动补偿</h2>
+        <span class="badge warn">admin_grant</span>
+      </div>
+      <div class="section-body">
+        <form id="grantForm" class="form-grid">
+          <label>
+            User Token
+            <input id="grantUserToken" name="user_token" autocomplete="off" placeholder="usr_..." pattern="usr_[A-Za-z0-9_-]{20,}" required />
+          </label>
+          <div class="split">
+            <label>
+              Credits
+              <input id="grantCredits" name="credits" type="number" min="1" max="10000" step="1" inputmode="numeric" required />
+            </label>
+            <label>
+              Note
+              <input id="grantNote" name="note" maxlength="200" placeholder="support adjustment" />
+            </label>
+          </div>
+          <button id="grantBtn" type="submit" class="primary">补偿 credits</button>
+        </form>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+const tokenInput = document.getElementById('adminToken');
+const rememberBtn = document.getElementById('rememberBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+const statusLine = document.getElementById('statusLine');
+const grantForm = document.getElementById('grantForm');
+const grantBtn = document.getElementById('grantBtn');
+const jobsTableWrap = document.getElementById('jobsTableWrap');
+
+const metricEls = {
+  galleryTotal: document.getElementById('galleryTotal'),
+  galleryMeta: document.getElementById('galleryMeta'),
+  jobsTotal: document.getElementById('jobsTotal'),
+  jobsMeta: document.getElementById('jobsMeta'),
+  creditsAvailable: document.getElementById('creditsAvailable'),
+  creditsMeta: document.getElementById('creditsMeta'),
+  codesActive: document.getElementById('codesActive'),
+  codesMeta: document.getElementById('codesMeta'),
+  configBadge: document.getElementById('configBadge'),
+};
+
+tokenInput.value = sessionStorage.getItem('adminToken') || '';
+
+function setStatus(message, type = '') {
+  statusLine.textContent = message;
+  statusLine.className = `status-line ${type}`.trim();
+}
+
+function getAdminToken() {
+  return tokenInput.value.trim();
+}
+
+function authHeaders() {
+  return {
+    'x-admin-token': getAdminToken(),
+  };
+}
+
+async function api(path, options = {}) {
+  const headers = {
+    ...authHeaders(),
+    ...(options.headers || {}),
+  };
+  const res = await fetch(path, { ...options, headers });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body || body.success === false) {
+    const message = body && body.error ? body.error.message : `request failed ${res.status}`;
+    throw new Error(message);
+  }
+  return body.data;
+}
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('zh-CN');
+}
+
+function statusClass(status) {
+  const normalized = String(status || 'unknown');
+  if (normalized === 'succeeded') return 'ok';
+  if (['failed', 'canceled', 'timed_out'].includes(normalized)) return 'bad';
+  return 'warn';
+}
+
+function renderJobs(jobs) {
+  if (!jobs || jobs.length === 0) {
+    jobsTableWrap.innerHTML = '<div class="empty">暂无任务</div>';
+    return;
+  }
+
+  const rows = jobs.map((job) => `
+    <tr>
+      <td><span class="badge ${statusClass(job.status)}">${escapeHtml(job.status || 'unknown')}</span></td>
+      <td class="mono">${escapeHtml(job.job_id || '-')}</td>
+      <td><div class="prompt">${escapeHtml(job.prompt || '-')}</div></td>
+      <td>${escapeHtml(job.size || '-')}</td>
+      <td>${escapeHtml(job.updated_at ? new Date(job.updated_at).toLocaleString('zh-CN') : '-')}</td>
+    </tr>
+  `).join('');
+
+  jobsTableWrap.innerHTML = `
+    <table class="table">
+      <thead>
+        <tr><th>状态</th><th>Job</th><th>Prompt</th><th>尺寸</th><th>更新</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+}
+
+function renderOverview(data) {
+  metricEls.galleryTotal.textContent = formatNumber(data.gallery.total);
+  metricEls.galleryMeta.textContent = `最近 ${formatNumber(data.gallery.recent.length)} 条`;
+  metricEls.jobsTotal.textContent = formatNumber(data.jobs.total);
+  metricEls.jobsMeta.textContent = Object.entries(data.jobs.by_status || {}).map(([key, value]) => `${key} ${value}`).join(' / ') || '暂无任务';
+  metricEls.creditsAvailable.textContent = formatNumber(data.credits.available_credits);
+  metricEls.creditsMeta.textContent = `冻结 ${formatNumber(data.credits.reserved_credits)} / 账本 ${formatNumber(data.credits.ledger_entries)}`;
+  metricEls.codesActive.textContent = formatNumber(data.credits.codes.active);
+  metricEls.codesMeta.textContent = `已兑换 ${formatNumber(data.credits.codes.redeemed)} / 总数 ${formatNumber(data.credits.codes.total)}`;
+  metricEls.configBadge.textContent = `${data.config.provider} · ${data.config.image_storage_provider}`;
+  metricEls.configBadge.className = data.config.has_required_env ? 'badge ok' : 'badge bad';
+  renderJobs(data.jobs.recent || []);
+}
+
+async function loadOverview() {
+  if (!getAdminToken()) {
+    setStatus('需要 ADMIN_TOKEN。', 'error');
+    return;
+  }
+  refreshBtn.disabled = true;
+  setStatus('刷新中...');
+  try {
+    const data = await api('/api/admin/overview');
+    renderOverview(data);
+    setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    refreshBtn.disabled = false;
+  }
+}
+
+rememberBtn.addEventListener('click', () => {
+  const token = getAdminToken();
+  if (!token) {
+    sessionStorage.removeItem('adminToken');
+    setStatus('已清空 token。');
+    return;
+  }
+  sessionStorage.setItem('adminToken', token);
+  setStatus('已保存到本次浏览器会话。', 'ok');
+});
+
+refreshBtn.addEventListener('click', loadOverview);
+
+grantForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!getAdminToken()) {
+    setStatus('需要 ADMIN_TOKEN。', 'error');
+    return;
+  }
+
+  const userToken = document.getElementById('grantUserToken').value.trim();
+  const credits = Number(document.getElementById('grantCredits').value);
+  const note = document.getElementById('grantNote').value.trim();
+  if (!/^usr_[A-Za-z0-9_-]{20,}$/.test(userToken)) {
+    setStatus('User Token 格式无效。', 'error');
+    return;
+  }
+  if (!Number.isInteger(credits) || credits < 1 || credits > 10000) {
+    setStatus('Credits 必须是 1 到 10000 的整数。', 'error');
+    return;
+  }
+  grantBtn.disabled = true;
+  setStatus('提交补偿中...');
+  try {
+    const data = await api('/api/admin/credits/grant', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user_token: userToken, credits, note }),
+    });
+    setStatus(`已补偿 ${data.credits_added} credits，可用余额 ${data.wallet.available_credits}。`, 'ok');
+    await loadOverview();
+    grantForm.reset();
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    grantBtn.disabled = false;
+  }
+});
+
+if (getAdminToken()) {
+  loadOverview();
+}
+</script>
+</body>
+</html>
