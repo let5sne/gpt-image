@@ -89,6 +89,8 @@ function setBaseEnv() {
   delete process.env.S3_FORCE_PATH_STYLE;
   delete process.env.ADMIN_TOKEN;
   delete process.env.ADMIN_GRANT_MAX_CREDITS;
+  delete process.env.ADMIN_BATCH_MAX_CODES;
+  delete process.env.ADMIN_BATCH_MAX_CREDITS_PER_CODE;
   delete process.env.APP_ACCESS_TOKEN;
   delete process.env.VERCEL;
   delete process.env.OPENROUTER_IMAGE_API_BASE;
@@ -732,6 +734,62 @@ test('POST /api/admin/credits/grant requires admin token and grants credits to a
     .set('x-admin-token', 'admin-secret')
     .send({ user_token: userToken, credits: '25' });
   assert.equal(stringCredits.status, 400);
+});
+
+test('admin redemption APIs create batches, list redacted codes, and revoke active codes', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const unauthorized = await request(app)
+    .post('/api/admin/redemption-batches')
+    .send({ name: 'launch', count: 2, credits_per_code: 50, prefix: 'IMG' });
+  assert.equal(unauthorized.status, 401);
+
+  const created = await request(app)
+    .post('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'launch', count: 2, credits_per_code: 50, prefix: 'IMG' });
+
+  assert.equal(created.status, 201);
+  assert.equal(created.body.success, true);
+  assert.equal(created.body.data.batch.name, 'launch');
+  assert.equal(created.body.data.batch.code_count, 2);
+  assert.equal(created.body.data.batch.credits_per_code, 50);
+  assert.equal(created.body.data.codes.length, 2);
+  assert.ok(created.body.data.codes.every((code) => /^IMG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)));
+
+  const batches = await request(app)
+    .get('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(batches.status, 200);
+  assert.ok(Array.isArray(batches.body.data.batches));
+  assert.ok(batches.body.data.batches.length >= 2);
+
+  const codes = await request(app)
+    .get('/api/admin/redemption-codes')
+    .set('x-admin-token', 'admin-secret')
+    .query({ batch_id: created.body.data.batch.id });
+  assert.equal(codes.status, 200);
+  assert.equal(codes.body.data.codes.length, 2);
+  assert.equal(JSON.stringify(codes.body.data).includes('code_hash'), false);
+  assert.ok(codes.body.data.codes.every((item) => item.code_preview.startsWith('IMG-')));
+
+  const revoke = await request(app)
+    .post(`/api/admin/redemption-codes/${codes.body.data.codes[0].id}/revoke`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ note: 'manual revoke' });
+  assert.equal(revoke.status, 200);
+  assert.equal(revoke.body.data.code.status, 'revoked');
+
+  const revokeAgain = await request(app)
+    .post(`/api/admin/redemption-codes/${codes.body.data.codes[0].id}/revoke`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ note: 'manual revoke again' });
+  assert.equal(revokeAgain.status, 409);
 });
 
 test('POST /api/generate releases reserved credits when upstream fails', async () => {

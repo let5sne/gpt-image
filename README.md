@@ -156,6 +156,40 @@ curl -X POST http://localhost:3000/api/admin/credits/grant \
 
 该接口只接受已存在的 `user_token`，不会自动创建钱包；每次补偿都会写入 `credit_ledger`，类型为 `admin_grant`。
 
+### 兑换码批次管理
+
+配置管理上限：
+
+```bash
+ADMIN_BATCH_MAX_CODES=5000
+ADMIN_BATCH_MAX_CREDITS_PER_CODE=100000
+```
+
+创建兑换码批次（接口会返回明文兑换码，仅返回一次）：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/redemption-batches \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"name":"launch","count":20,"credits_per_code":100,"prefix":"IMG"}'
+```
+
+查询批次与码列表（码列表只返回 `code_preview`，不返回 `code_hash`）：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/redemption-batches?limit=50"
+curl -H "x-admin-token: $ADMIN_TOKEN" "http://localhost:3000/api/admin/redemption-codes?batch_id=<batch_id>&limit=100"
+```
+
+撤销未兑换的兑换码：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/redemption-codes/<code_id>/revoke \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"note":"manual revoke"}'
+```
+
 ## API
 
 统一响应格式：

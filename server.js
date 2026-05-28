@@ -177,6 +177,8 @@ const CREDIT_COSTS = {
   high: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH || 20),
 };
 const ADMIN_GRANT_MAX_CREDITS = Number(process.env.ADMIN_GRANT_MAX_CREDITS || 10000);
+const ADMIN_BATCH_MAX_CODES = Number(process.env.ADMIN_BATCH_MAX_CODES || 5000);
+const ADMIN_BATCH_MAX_CREDITS_PER_CODE = Number(process.env.ADMIN_BATCH_MAX_CREDITS_PER_CODE || 100000);
 
 const dailyUsage = new Map();
 const jobs = new Map();
@@ -538,6 +540,36 @@ function createPublicToken() {
   return `usr_${crypto.randomBytes(24).toString('base64url')}`;
 }
 
+function makeRedemptionCode(prefix = 'IMG') {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let raw = '';
+  for (let i = 0; i < 12; i += 1) {
+    raw += chars[crypto.randomInt(0, chars.length)];
+  }
+  return `${prefix}-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+function redactRedemptionCodePreview(codeHint = '') {
+  if (!codeHint) return 'hidden';
+  if (codeHint.length <= 6) return `${codeHint.slice(0, 2)}***`;
+  return `${codeHint.slice(0, 6)}***`;
+}
+
+function serializeAdminRedemptionCode(item) {
+  return {
+    id: item.id,
+    batch_id: item.batch_id,
+    credits: item.credits,
+    status: item.status,
+    code_preview: redactRedemptionCodePreview(item.code_hint || ''),
+    redeemed_by_user_id: item.redeemed_by_user_id || null,
+    redeemed_at: item.redeemed_at || null,
+    revoked_at: item.revoked_at || null,
+    expires_at: item.expires_at || null,
+    created_at: item.created_at,
+  };
+}
+
 function getUserToken(req) {
   const headerToken = req.headers['x-user-token'];
   if (headerToken && typeof headerToken === 'string') return headerToken.trim();
@@ -681,6 +713,125 @@ function grantCreditsToUserToken(userToken, credits, note) {
     writeCreditsState(state);
 
     return serializeWallet(state, user.id);
+  });
+}
+
+function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt }) {
+  return withCreditsLock(() => {
+    const state = readCreditsState();
+    const batchId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const plainCodes = [];
+    const normalizedPrefix = String(prefix || 'IMG').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'IMG';
+    const existingHashes = new Set((state.redemption_codes || []).map((item) => item.code_hash));
+
+    const batch = {
+      id: batchId,
+      name,
+      credits_per_code: creditsPerCode,
+      code_count: count,
+      expires_at: expiresAt,
+      created_at: now,
+    };
+    state.redemption_batches.push(batch);
+
+    for (let i = 0; i < count; i += 1) {
+      let code = makeRedemptionCode(normalizedPrefix);
+      let codeHash = hashSecret(code);
+      let retries = 0;
+      while (existingHashes.has(codeHash) && retries < 10) {
+        code = makeRedemptionCode(normalizedPrefix);
+        codeHash = hashSecret(code);
+        retries += 1;
+      }
+      if (existingHashes.has(codeHash)) {
+        throw new Error('failed to generate unique redemption code');
+      }
+
+      plainCodes.push(code);
+      existingHashes.add(codeHash);
+      state.redemption_codes.push({
+        id: crypto.randomUUID(),
+        batch_id: batchId,
+        code_hash: codeHash,
+        code_hint: code.slice(0, 8),
+        credits: creditsPerCode,
+        status: 'active',
+        redeemed_by_user_id: null,
+        redeemed_at: null,
+        revoked_at: null,
+        expires_at: expiresAt,
+        created_at: now,
+      });
+    }
+
+    writeCreditsState(state);
+
+    return {
+      batch,
+      plainCodes,
+    };
+  });
+}
+
+function listRedemptionBatches(limit = 50) {
+  const state = readCreditsState();
+  const byBatch = new Map();
+  for (const item of state.redemption_codes || []) {
+    if (!byBatch.has(item.batch_id)) {
+      byBatch.set(item.batch_id, []);
+    }
+    byBatch.get(item.batch_id).push(item);
+  }
+
+  const batches = (state.redemption_batches || [])
+    .slice()
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    .slice(0, limit)
+    .map((batch) => {
+      const codes = byBatch.get(batch.id) || [];
+      return {
+        ...batch,
+        code_stats: {
+          total: codes.length,
+          active: codes.filter((item) => item.status === 'active').length,
+          redeemed: codes.filter((item) => item.status === 'redeemed').length,
+          revoked: codes.filter((item) => item.status === 'revoked').length,
+          expired: codes.filter((item) => item.expires_at && new Date(item.expires_at).getTime() < Date.now()).length,
+        },
+      };
+    });
+  return batches;
+}
+
+function listRedemptionCodes({ batchId, status, limit = 100 }) {
+  const state = readCreditsState();
+  let codes = (state.redemption_codes || []).slice();
+  if (batchId) {
+    codes = codes.filter((item) => item.batch_id === batchId);
+  }
+  if (status) {
+    codes = codes.filter((item) => item.status === status);
+  }
+  return codes
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    .slice(0, limit)
+    .map(serializeAdminRedemptionCode);
+}
+
+function revokeRedemptionCode(codeId, note) {
+  return withCreditsLock(() => {
+    const state = readCreditsState();
+    const code = (state.redemption_codes || []).find((item) => item.id === codeId);
+    if (!code) return { error: 'not_found' };
+    if (code.status === 'redeemed') return { error: 'already_redeemed' };
+    if (code.status === 'revoked') return { error: 'already_revoked' };
+
+    code.status = 'revoked';
+    code.revoked_at = new Date().toISOString();
+    code.revoked_note = note || null;
+    writeCreditsState(state);
+    return { code: serializeAdminRedemptionCode(code) };
   });
 }
 
@@ -1208,6 +1359,104 @@ app.post('/api/admin/credits/grant', requireAdminAuth, async (req, res) => {
   return sendOk(res, req, {
     credits_added: credits,
     wallet,
+  });
+});
+
+app.post('/api/admin/redemption-batches', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+
+  const name = req.body && typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  const count = req.body ? req.body.count : null;
+  const creditsPerCode = req.body ? req.body.credits_per_code : null;
+  const prefix = req.body && typeof req.body.prefix === 'string' ? req.body.prefix.trim() : 'IMG';
+  const expiresAtRaw = req.body && typeof req.body.expires_at === 'string' ? req.body.expires_at.trim() : '';
+  const expiresAt = expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null;
+
+  if (!name) {
+    return sendError(res, req, 400, 'invalid_name', 'name is required');
+  }
+  if (!Number.isInteger(count) || count < 1 || count > ADMIN_BATCH_MAX_CODES) {
+    return sendError(res, req, 400, 'invalid_count', `count must be an integer between 1 and ${ADMIN_BATCH_MAX_CODES}`);
+  }
+  if (!Number.isInteger(creditsPerCode) || creditsPerCode < 1 || creditsPerCode > ADMIN_BATCH_MAX_CREDITS_PER_CODE) {
+    return sendError(res, req, 400, 'invalid_credits_per_code', `credits_per_code must be an integer between 1 and ${ADMIN_BATCH_MAX_CREDITS_PER_CODE}`);
+  }
+  if (expiresAtRaw && Number.isNaN(Date.parse(expiresAtRaw))) {
+    return sendError(res, req, 400, 'invalid_expires_at', 'expires_at must be a valid ISO datetime string');
+  }
+
+  const created = await createRedemptionBatch({
+    name,
+    count,
+    creditsPerCode,
+    prefix,
+    expiresAt,
+  });
+
+  log('info', 'admin_redemption_batch_created', {
+    request_id: req.requestId,
+    batch_id: created.batch.id,
+    code_count: count,
+    credits_per_code: creditsPerCode,
+  });
+
+  return sendOk(res, req, {
+    batch: created.batch,
+    codes: created.plainCodes,
+  }, 201);
+});
+
+app.get('/api/admin/redemption-batches', requireAdminAuth, (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const limit = Number(req.query && req.query.limit) || 50;
+  const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 200) : 50;
+  return sendOk(res, req, {
+    batches: listRedemptionBatches(safeLimit),
+  });
+});
+
+app.get('/api/admin/redemption-codes', requireAdminAuth, (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const batchId = req.query && typeof req.query.batch_id === 'string' ? req.query.batch_id : '';
+  const status = req.query && typeof req.query.status === 'string' ? req.query.status : '';
+  const limit = Number(req.query && req.query.limit) || 100;
+  const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 500) : 100;
+  return sendOk(res, req, {
+    codes: listRedemptionCodes({ batchId, status, limit: safeLimit }),
+  });
+});
+
+app.post('/api/admin/redemption-codes/:id/revoke', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const codeId = req.params.id;
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : '';
+  const result = await revokeRedemptionCode(codeId, note);
+  if (result.error === 'not_found') {
+    return sendError(res, req, 404, 'code_not_found', 'redemption code not found');
+  }
+  if (result.error === 'already_redeemed') {
+    return sendError(res, req, 409, 'code_already_redeemed', 'redemption code already redeemed');
+  }
+  if (result.error === 'already_revoked') {
+    return sendError(res, req, 409, 'code_already_revoked', 'redemption code already revoked');
+  }
+
+  log('info', 'admin_redemption_code_revoked', {
+    request_id: req.requestId,
+    code_id: codeId,
+    note_hash: sha256Hex(note || '').slice(0, 12),
+  });
+
+  return sendOk(res, req, {
+    code: result.code,
   });
 });
 
