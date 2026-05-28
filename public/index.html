@@ -772,6 +772,14 @@ h2 {
     <button type="button" onclick="redeemCode()">兑换</button>
   </div>
   <div class="helper-row">
+    <input id="emailInput" type="email" placeholder="邮箱登录（user@example.com）" />
+    <input id="emailCodeInput" type="text" placeholder="验证码" maxlength="6" inputmode="numeric" />
+    <button type="button" onclick="sendEmailCode()">发码</button>
+    <button type="button" onclick="verifyEmailCode()">登录</button>
+    <button type="button" onclick="logoutEmailAuth()">登出</button>
+  </div>
+  <p class="helper-note" id="authStatus">邮箱登录未启用或尚未登录。</p>
+  <div class="helper-row">
     <input id="accessToken" type="password" placeholder="Access Token（若后端开启鉴权请填写）" />
   </div>
   <p class="helper-note">已自动限制 prompt 长度（4000 字符）与请求频率，失败时会自动重试 1 次。</p>
@@ -857,6 +865,23 @@ function getUserToken() {
 
 function persistUserToken(token) {
   if (token) localStorage.setItem('image_studio_user_token', token);
+}
+
+function getEmailAuthToken() {
+  return localStorage.getItem('image_studio_email_auth_token') || '';
+}
+
+function persistEmailAuthToken(token) {
+  if (!token) {
+    localStorage.removeItem('image_studio_email_auth_token');
+    return;
+  }
+  localStorage.setItem('image_studio_email_auth_token', token);
+}
+
+function setAuthStatus(message) {
+  const el = document.getElementById('authStatus');
+  if (el) el.textContent = message;
 }
 
 function getQualityCost() {
@@ -993,9 +1018,111 @@ function getAuthHeaders() {
   const headers = { 'Content-Type': 'application/json' };
   const token = getAccessToken();
   if (token) headers['x-app-token'] = token;
+  const emailToken = getEmailAuthToken();
+  if (emailToken) headers['x-auth-token'] = emailToken;
   const userToken = getUserToken();
   if (userToken) headers['x-user-token'] = userToken;
   return headers;
+}
+
+async function sendEmailCode() {
+  const emailEl = document.getElementById('emailInput');
+  const email = emailEl ? emailEl.value.trim() : '';
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email) {
+    if (emailEl) emailEl.focus();
+    setAuthStatus('请先输入邮箱。');
+    return;
+  }
+  if (!emailPattern.test(email)) {
+    if (emailEl) emailEl.focus();
+    setAuthStatus('请输入有效的邮箱地址。');
+    return;
+  }
+
+  try {
+    const api = await requestWithRetry('/api/auth/email/send-code', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ email }),
+    }, 0);
+
+    if (api.data && api.data.dev_code) {
+      const codeEl = document.getElementById('emailCodeInput');
+      if (codeEl) codeEl.value = String(api.data.dev_code);
+      setAuthStatus(`验证码已发送（开发模式展示：${api.data.dev_code}）。`);
+    } else {
+      setAuthStatus('验证码已发送，请检查邮箱。');
+    }
+  } catch (e) {
+    const rid = e.requestId ? `（request_id: ${e.requestId}）` : '';
+    setAuthStatus(`${e.message}${rid}`);
+  }
+}
+
+async function verifyEmailCode() {
+  const emailEl = document.getElementById('emailInput');
+  const codeEl = document.getElementById('emailCodeInput');
+  const email = emailEl ? emailEl.value.trim() : '';
+  const code = codeEl ? codeEl.value.trim() : '';
+  if (!email || !code) {
+    setAuthStatus('请填写邮箱和验证码。');
+    return;
+  }
+
+  try {
+    const api = await requestWithRetry('/api/auth/email/verify-code', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ email, code }),
+    }, 0);
+    if (api.data && api.data.auth_token) {
+      persistEmailAuthToken(api.data.auth_token);
+    }
+    if (codeEl) codeEl.value = '';
+    const emailLabel = (api && api.data && api.data.user && api.data.user.email)
+      ? api.data.user.email
+      : email;
+    setAuthStatus(`已登录：${emailLabel}`);
+  } catch (e) {
+    const rid = e.requestId ? `（request_id: ${e.requestId}）` : '';
+    setAuthStatus(`${e.message}${rid}`);
+  }
+}
+
+async function logoutEmailAuth() {
+  try {
+    await requestWithRetry('/api/auth/logout', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    }, 0);
+  } catch (e) {
+    // 退出时即使失败，也应该清除本地 token。
+  } finally {
+    persistEmailAuthToken('');
+    setAuthStatus('已登出。');
+  }
+}
+
+async function loadEmailAuthMe() {
+  const token = getEmailAuthToken();
+  if (!token) {
+    setAuthStatus('邮箱登录未启用或尚未登录。');
+    return;
+  }
+  try {
+    const api = await requestWithRetry('/api/auth/me', {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 0);
+    const emailLabel = (api && api.data && api.data.user && api.data.user.email)
+      ? api.data.user.email
+      : '未知用户';
+    setAuthStatus(`已登录：${emailLabel}`);
+  } catch (e) {
+    persistEmailAuthToken('');
+    setAuthStatus('登录已失效，请重新登录。');
+  }
 }
 
 function renderImages(data) {
@@ -1518,6 +1645,7 @@ if (cachedToken) {
 updateEstimatedCost();
 loadWallet();
 loadGallery();
+loadEmailAuthMe();
 </script>
 </body>
 </html>
