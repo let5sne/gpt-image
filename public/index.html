@@ -906,9 +906,9 @@ h2 {
           <div class="plan-credits">100 credits</div>
         </div>
         <div class="plan-usage-grid" aria-label="体验包预计可生成数量">
-          <div class="plan-usage-item"><strong>33 张</strong><span>Low</span></div>
-          <div class="plan-usage-item"><strong>12 张</strong><span>Medium</span></div>
-          <div class="plan-usage-item"><strong>5 张</strong><span>Auto</span></div>
+          <div class="plan-usage-item"><strong>5 张</strong><span>每张 20 credits</span></div>
+          <div class="plan-usage-item"><strong>≈ ¥1.98</strong><span>单张收入</span></div>
+          <div class="plan-usage-item"><strong>约 53%</strong><span>目标毛利</span></div>
         </div>
         <button class="plan-btn" type="button" onclick="focusRedeem('体验包')">兑换使用</button>
       </article>
@@ -922,9 +922,9 @@ h2 {
           <div class="plan-credits">320 credits</div>
         </div>
         <div class="plan-usage-grid" aria-label="标准包预计可生成数量">
-          <div class="plan-usage-item"><strong>106 张</strong><span>Low</span></div>
-          <div class="plan-usage-item"><strong>40 张</strong><span>Medium</span></div>
-          <div class="plan-usage-item"><strong>16 张</strong><span>Auto</span></div>
+          <div class="plan-usage-item"><strong>16 张</strong><span>每张 20 credits</span></div>
+          <div class="plan-usage-item"><strong>≈ ¥1.81</strong><span>单张收入</span></div>
+          <div class="plan-usage-item"><strong>约 48%</strong><span>目标毛利</span></div>
         </div>
         <button class="plan-btn" type="button" onclick="focusRedeem('标准包')">兑换使用</button>
       </article>
@@ -938,9 +938,9 @@ h2 {
           <div class="plan-credits">1200 credits</div>
         </div>
         <div class="plan-usage-grid" aria-label="专业包预计可生成数量">
-          <div class="plan-usage-item"><strong>400 张</strong><span>Low</span></div>
-          <div class="plan-usage-item"><strong>150 张</strong><span>Medium</span></div>
-          <div class="plan-usage-item"><strong>60 张</strong><span>Auto</span></div>
+          <div class="plan-usage-item"><strong>60 张</strong><span>每张 20 credits</span></div>
+          <div class="plan-usage-item"><strong>≈ ¥1.65</strong><span>单张收入</span></div>
+          <div class="plan-usage-item"><strong>约 43%</strong><span>目标毛利</span></div>
         </div>
         <button class="plan-btn" type="button" onclick="focusRedeem('专业包')">兑换使用</button>
       </article>
@@ -984,8 +984,8 @@ h2 {
       </div>
       <div class="size-wrap">
         <select id="quality" onchange="updateEstimatedCost()">
-          <option value="low">Low · 3 credits</option>
-          <option value="medium">Medium · 8 credits</option>
+          <option value="low">Low · 20 credits</option>
+          <option value="medium">Medium · 20 credits</option>
           <option value="auto" selected>Auto · 20 credits</option>
         </select>
       </div>
@@ -1110,7 +1110,7 @@ function setAuthStatus(message, state = '') {
 
 function getQualityCost() {
   const quality = document.getElementById('quality')?.value || 'auto';
-  return { low: 3, medium: 8, auto: 20, high: 20 }[quality] || 20;
+  return { low: 20, medium: 20, auto: 20, high: 20 }[quality] || 20;
 }
 
 function updateEstimatedCost() {

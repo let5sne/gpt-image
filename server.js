@@ -194,8 +194,8 @@ if (CREDITS_ENABLED && (!process.env.CREDIT_CODE_PEPPER || CREDIT_CODE_PEPPER ==
   );
 }
 const CREDIT_COSTS = {
-  low: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_LOW || 3),
-  medium: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_MEDIUM || 8),
+  low: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_LOW || 20),
+  medium: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_MEDIUM || 20),
   auto: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_AUTO || 20),
   high: Number(process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH || 20),
 };
