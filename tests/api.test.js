@@ -17,11 +17,19 @@ async function waitFor(check, timeoutMs = 1000) {
   throw new Error('timed out waiting for condition');
 }
 
+// 模块加载时的原生 fetch。部分用例替换 global.fetch 后未在 finally 中恢复(历史遗留),
+// 这里统一在每个用例结束后还原,避免被替换的 mock 泄漏到后续用例造成跨用例污染。
+const PRISTINE_FETCH = global.fetch;
+
 function loadFreshApp() {
   const modulePath = require.resolve('../server');
   delete require.cache[modulePath];
   return require('../server');
 }
+
+test.afterEach(() => {
+  global.fetch = PRISTINE_FETCH;
+});
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gpt-image-test-'));
@@ -74,10 +82,13 @@ function setBaseEnv() {
   delete process.env.REPLICATE_MAX_POLL_MS;
   delete process.env.CREDITS_FILE;
   delete process.env.CREDIT_CODE_PEPPER;
-  delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_LOW;
-  delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_MEDIUM;
-  delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_AUTO;
-  delete process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH;
+  // 显式固定计费,避免被开发机本地 .env(经 server.js 顶部 dotenv.config() 在每次
+  // loadFreshApp 重新载入时注入)污染:CI 无 .env 时这些断言才能稳定成立。
+  // low=3 对应 /api/generate 低质量用例;auto=20 对应 v1 固定计费用例。
+  process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_LOW = '3';
+  process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_MEDIUM = '20';
+  process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_AUTO = '20';
+  process.env.CREDIT_COST_REPLICATE_GPT_IMAGE_2_HIGH = '20';
   delete process.env.IMAGE_STORAGE_PROVIDER;
   delete process.env.IMAGE_STORAGE_PUBLIC_BASE_URL;
   delete process.env.IMAGE_STORAGE_PREFIX;
