@@ -403,6 +403,235 @@ h1 {
   }
 }
 
+/* ── API 客户与密钥 ───────────────────────────────── */
+.customer-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  margin-bottom: 16px;
+}
+
+.customer-list {
+  display: grid;
+  gap: 14px;
+}
+
+.customer-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(52, 45, 32, .07);
+  overflow: hidden;
+}
+
+.customer-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  background: linear-gradient(180deg, rgba(53,107,92,.05), rgba(53,107,92,0));
+  border-bottom: 1px solid var(--line);
+}
+
+.customer-id {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.customer-id strong {
+  font-size: 1.04rem;
+  letter-spacing: -.01em;
+}
+
+.customer-id small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: .8rem;
+  line-height: 1.4;
+}
+
+.customer-wallet {
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.customer-wallet b {
+  display: block;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--ok);
+}
+
+.customer-wallet span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.customer-body {
+  padding: 14px 16px;
+}
+
+.key-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.key-head h3 {
+  margin: 0;
+  font-size: .78rem;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px dashed var(--line);
+}
+
+.key-row:first-of-type { border-top: 0; }
+
+.key-row .mono { font-size: .84rem; }
+
+.key-row .key-when {
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.key-row .spacer { flex: 1 1 auto; }
+
+.key-revoked .mono { text-decoration: line-through; opacity: .6; }
+
+.inline-form {
+  display: none;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.inline-form.is-open { display: grid; }
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.btn-sm {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: .8rem;
+  font-weight: 650;
+}
+
+.btn-danger {
+  border-color: rgba(168,60,48,.4);
+  color: var(--danger);
+}
+
+.btn-danger:hover { background: rgba(168,60,48,.08); }
+
+/* 一次性密钥揭示弹层 —— 服务端只存哈希,明文仅此一刻可见 */
+.reveal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: none;
+  place-items: center;
+  padding: 20px;
+  background: rgba(30, 33, 28, .46);
+  backdrop-filter: blur(3px);
+  z-index: 40;
+}
+
+.reveal-backdrop.is-open { display: grid; }
+
+.reveal-card {
+  width: min(540px, 100%);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--accent-2);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 30px 80px rgba(52, 45, 32, .32);
+  padding: 24px;
+  animation: reveal-pop .26s cubic-bezier(.16, 1, .3, 1);
+}
+
+@keyframes reveal-pop {
+  from { opacity: 0; transform: translateY(12px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.reveal-card .eyebrow { color: var(--accent-2); }
+
+.reveal-card h2 {
+  margin: 0 0 6px;
+  font-size: 1.3rem;
+}
+
+.reveal-warn {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: .86rem;
+  line-height: 1.5;
+}
+
+.reveal-key {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(183,93,56,.35);
+  border-radius: 9px;
+  background: rgba(183,93,56,.07);
+  margin-bottom: 18px;
+}
+
+.reveal-key code {
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92rem;
+  word-break: break-all;
+  color: var(--ink);
+}
+
+.reveal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 920px) {
+  .customer-toolbar { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 560px) {
   .grid,
   .split {
@@ -413,6 +642,9 @@ h1 {
     display: block;
     overflow-x: auto;
   }
+
+  .customer-card-head { flex-direction: column; }
+  .customer-wallet { text-align: left; }
 }
 </style>
 </head>
@@ -549,7 +781,47 @@ h1 {
       <div id="emailUsersTableWrap" class="empty">暂无数据</div>
     </div>
   </section>
+
+  <section class="section" style="margin-top: 16px;">
+    <div class="section-head">
+      <h2>API 客户与密钥</h2>
+      <span id="customersMeta" class="badge">未加载</span>
+    </div>
+    <div class="section-body">
+      <form id="customerCreateForm" class="customer-toolbar">
+        <label>
+          客户名称
+          <input id="customerName" name="name" maxlength="120" placeholder="例如 Acme Studio" required />
+        </label>
+        <label>
+          联系方式
+          <input id="customerContact" name="contact" maxlength="200" placeholder="可选，邮箱/微信" />
+        </label>
+        <label>
+          备注
+          <input id="customerNote" name="note" maxlength="200" placeholder="可选，用途说明" />
+        </label>
+        <button id="customerCreateBtn" type="submit" class="primary">创建客户</button>
+      </form>
+      <div id="customersWrap" class="empty">暂无数据</div>
+    </div>
+  </section>
 </main>
+
+<div id="revealBackdrop" class="reveal-backdrop" role="dialog" aria-modal="true" aria-labelledby="revealTitle">
+  <div class="reveal-card">
+    <p class="eyebrow">API Key 已签发</p>
+    <h2 id="revealTitle">请立即复制密钥</h2>
+    <p class="reveal-warn">这是该密钥唯一一次完整显示。服务端只保存哈希值，关闭后将无法再次查看。如丢失只能吊销后重新签发。</p>
+    <div class="reveal-key">
+      <code id="revealKey" class="mono">gim_...</code>
+      <button id="revealCopyBtn" type="button" class="primary btn-sm">复制</button>
+    </div>
+    <div class="reveal-actions">
+      <button id="revealCloseBtn" type="button">我已保存，关闭</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const tokenInput = document.getElementById('adminToken');
@@ -573,6 +845,14 @@ const emailUsersMeta = document.getElementById('emailUsersMeta');
 const emailUsersQuery = document.getElementById('emailUsersQuery');
 const emailUsersSearchBtn = document.getElementById('emailUsersSearchBtn');
 const emailUsersTableWrap = document.getElementById('emailUsersTableWrap');
+const customersMeta = document.getElementById('customersMeta');
+const customerCreateForm = document.getElementById('customerCreateForm');
+const customerCreateBtn = document.getElementById('customerCreateBtn');
+const customersWrap = document.getElementById('customersWrap');
+const revealBackdrop = document.getElementById('revealBackdrop');
+const revealKey = document.getElementById('revealKey');
+const revealCopyBtn = document.getElementById('revealCopyBtn');
+const revealCloseBtn = document.getElementById('revealCloseBtn');
 
 const metricEls = {
   galleryTotal: document.getElementById('galleryTotal'),
@@ -951,6 +1231,7 @@ async function loadOverview() {
     await loadMetrics();
     await loadAuditLogs();
     await loadEmailUsers();
+    await loadCustomers();
     setStatus(`已刷新 ${new Date().toLocaleTimeString('zh-CN')}`, 'ok');
   } catch (err) {
     if (err.code === 'admin_not_configured') {
@@ -1112,9 +1393,289 @@ grantEmailForm.addEventListener('submit', async (event) => {
   }
 });
 
+function keyStatusBadge(status) {
+  const s = String(status || 'active');
+  if (s === 'active') return '<span class="badge ok">active</span>';
+  if (s === 'revoked') return '<span class="badge bad">revoked</span>';
+  return `<span class="badge warn">${escapeHtml(s)}</span>`;
+}
+
+function renderKeyRow(key) {
+  const created = key.created_at ? new Date(key.created_at).toLocaleString('zh-CN') : '-';
+  const lastUsed = key.last_used_at ? new Date(key.last_used_at).toLocaleString('zh-CN') : '尚未使用';
+  const expires = key.expires_at ? `· 到期 ${new Date(key.expires_at).toLocaleDateString('zh-CN')}` : '';
+  const isActive = String(key.status) === 'active';
+  const revokeBtn = isActive
+    ? `<button class="btn-sm btn-danger" type="button" data-revoke="${escapeHtml(key.id)}">吊销</button>`
+    : '';
+  return `
+    <div class="key-row ${isActive ? '' : 'key-revoked'}">
+      <span class="mono">${escapeHtml(key.key_prefix || '')}…</span>
+      ${keyStatusBadge(key.status)}
+      <span class="key-when">创建 ${escapeHtml(created)} · 最近使用 ${escapeHtml(lastUsed)} ${expires}</span>
+      <span class="spacer"></span>
+      ${revokeBtn}
+    </div>
+  `;
+}
+
+function renderCustomerCard(customer) {
+  const keys = Array.isArray(customer.api_keys) ? customer.api_keys : [];
+  const activeKeys = keys.filter((k) => String(k.status) === 'active').length;
+  const wallet = customer.wallet || { available_credits: 0, reserved_credits: 0 };
+  const keyRows = keys.length > 0
+    ? keys.map(renderKeyRow).join('')
+    : '<div class="empty" style="padding:14px;">还没有密钥，点击下方「签发密钥」。</div>';
+  const cid = escapeHtml(customer.id);
+  return `
+    <article class="customer-card" data-customer="${cid}">
+      <div class="customer-card-head">
+        <div class="customer-id">
+          <div>
+            <strong>${escapeHtml(customer.name || '未命名客户')}</strong>
+            ${customer.status === 'active' ? '<span class="badge ok">active</span>' : `<span class="badge">${escapeHtml(customer.status || '-')}</span>`}
+            <small>${escapeHtml(customer.contact || '无联系方式')}${customer.note ? ' · ' + escapeHtml(customer.note) : ''}</small>
+            <small class="mono">${cid}</small>
+          </div>
+        </div>
+        <div class="customer-wallet">
+          <b>${formatNumber(wallet.available_credits)}</b>
+          <span>可用 · 冻结 ${formatNumber(wallet.reserved_credits)}</span>
+        </div>
+      </div>
+      <div class="customer-body">
+        <div class="key-head">
+          <h3>API 密钥（${activeKeys} 个有效 / 共 ${keys.length}）</h3>
+        </div>
+        ${keyRows}
+        <form class="inline-form" data-form="issue" data-customer="${cid}">
+          <div class="split">
+            <label>密钥备注<input name="note" maxlength="200" placeholder="可选，用途" /></label>
+            <label>到期时间<input name="expires_at" type="date" /></label>
+          </div>
+          <button type="submit" class="primary btn-sm">确认签发</button>
+        </form>
+        <form class="inline-form" data-form="grant" data-customer="${cid}">
+          <div class="split">
+            <label>充值 credits<input name="credits" type="number" min="1" max="10000" step="1" inputmode="numeric" placeholder="1 - 10000" /></label>
+            <label>备注<input name="note" maxlength="200" placeholder="可选" /></label>
+          </div>
+          <button type="submit" class="primary btn-sm">确认充值</button>
+        </form>
+        <div class="card-actions">
+          <button class="btn-sm" type="button" data-toggle="issue" data-customer="${cid}">签发密钥</button>
+          <button class="btn-sm" type="button" data-toggle="grant" data-customer="${cid}">充值 credits</button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderCustomers(customers) {
+  if (!customers || customers.length === 0) {
+    customersWrap.innerHTML = '<div class="empty">还没有 API 客户，使用上方表单创建第一个。</div>';
+    customersMeta.textContent = '共 0 个';
+    customersMeta.className = 'badge';
+    return;
+  }
+  customersWrap.innerHTML = `<div class="customer-list">${customers.map(renderCustomerCard).join('')}</div>`;
+  customersMeta.textContent = `共 ${formatNumber(customers.length)} 个`;
+  customersMeta.className = 'badge ok';
+}
+
+async function loadCustomers() {
+  if (!getAdminToken()) {
+    customersMeta.textContent = '需要 token';
+    customersMeta.className = 'badge bad';
+    customersWrap.innerHTML = '<div class="empty">请输入 ADMIN_TOKEN</div>';
+    return;
+  }
+  try {
+    const data = await api('/api/admin/api-customers');
+    renderCustomers(data.customers || []);
+  } catch (err) {
+    if (err.code === 'credits_disabled') {
+      customersMeta.textContent = '计费未启用';
+      customersMeta.className = 'badge warn';
+      customersWrap.innerHTML = '<div class="empty">当前环境未启用计费（CREDITS_ENABLED），无法管理 API 客户。</div>';
+      return;
+    }
+    customersMeta.textContent = '加载失败';
+    customersMeta.className = 'badge bad';
+    customersWrap.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function openReveal(secret) {
+  revealKey.textContent = secret;
+  revealBackdrop.classList.add('is-open');
+  revealCopyBtn.focus();
+}
+
+function closeReveal() {
+  revealBackdrop.classList.remove('is-open');
+  revealKey.textContent = 'gim_...';
+}
+
+revealCopyBtn.addEventListener('click', async () => {
+  try {
+    const ok = await copyText(revealKey.textContent);
+    if (!ok) throw new Error('copy failed');
+    setStatus('API key 已复制到剪贴板。', 'ok');
+  } catch (err) {
+    setStatus('复制失败，请手动选中复制。', 'error');
+  }
+});
+revealCloseBtn.addEventListener('click', closeReveal);
+revealBackdrop.addEventListener('click', (event) => {
+  if (event.target === revealBackdrop) closeReveal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && revealBackdrop.classList.contains('is-open')) closeReveal();
+});
+
+customerCreateForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!getAdminToken()) {
+    setStatus('需要 ADMIN_TOKEN。', 'error');
+    return;
+  }
+  const name = document.getElementById('customerName').value.trim();
+  const contact = document.getElementById('customerContact').value.trim();
+  const note = document.getElementById('customerNote').value.trim();
+  if (!name) {
+    setStatus('客户名称不能为空。', 'error');
+    return;
+  }
+  customerCreateBtn.disabled = true;
+  setStatus('创建客户中...');
+  try {
+    const customer = await api('/api/admin/api-customers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, contact, note }),
+    });
+    setStatus(`已创建客户 ${customer.name}。`, 'ok');
+    customerCreateForm.reset();
+    await loadCustomers();
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    customerCreateBtn.disabled = false;
+  }
+});
+
+async function issueKey(customerId, form) {
+  const note = form.elements.note.value.trim();
+  const expiresRaw = form.elements.expires_at.value;
+  const body = { note };
+  if (expiresRaw) {
+    // <input type="date"> 给出本地日期,转成 UTC 当天 23:59:59 的 ISO,确保是未来时刻
+    const parsed = new Date(`${expiresRaw}T23:59:59`);
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
+      setStatus('到期时间必须是未来的日期。', 'error');
+      return;
+    }
+    body.expires_at = parsed.toISOString();
+  }
+  const submitBtn = form.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setStatus('签发密钥中...');
+  try {
+    const result = await api(`/api/admin/api-customers/${encodeURIComponent(customerId)}/api-keys`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    openReveal(result.api_key);
+    setStatus('密钥已签发，请在弹窗中复制。', 'ok');
+    await loadCustomers();
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+async function grantToCustomer(customerId, form) {
+  const credits = Number(form.elements.credits.value);
+  const note = form.elements.note.value.trim();
+  if (!Number.isInteger(credits) || credits < 1 || credits > 10000) {
+    setStatus('Credits 必须是 1 到 10000 的整数。', 'error');
+    return;
+  }
+  const submitBtn = form.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setStatus('充值中...');
+  try {
+    const data = await api(`/api/admin/api-customers/${encodeURIComponent(customerId)}/credits/grant`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credits, note }),
+    });
+    setStatus(`已充值 ${data.credits_added} credits，可用余额 ${data.wallet.available_credits}。`, 'ok');
+    await loadCustomers();
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+async function revokeKey(keyId, trigger) {
+  if (!window.confirm('确定吊销该密钥？吊销后使用该 key 的请求将立即失败，且不可恢复。')) return;
+  trigger.disabled = true;
+  setStatus('吊销密钥中...');
+  try {
+    await api(`/api/admin/api-keys/${encodeURIComponent(keyId)}/revoke`, { method: 'POST' });
+    setStatus('密钥已吊销。', 'ok');
+    await loadCustomers();
+  } catch (err) {
+    setStatus(err.message, 'error');
+    trigger.disabled = false;
+  }
+}
+
+customersWrap.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!target || typeof target.closest !== 'function') return;
+
+  const toggle = target.closest('button[data-toggle]');
+  if (toggle) {
+    const kind = toggle.getAttribute('data-toggle');
+    const cid = toggle.getAttribute('data-customer');
+    const form = customersWrap.querySelector(`form[data-form="${kind}"][data-customer="${CSS.escape(cid)}"]`);
+    if (form) {
+      const willOpen = !form.classList.contains('is-open');
+      const card = toggle.closest('.customer-card');
+      card.querySelectorAll('.inline-form.is-open').forEach((f) => f.classList.remove('is-open'));
+      if (willOpen) form.classList.add('is-open');
+    }
+    return;
+  }
+
+  const revoke = target.closest('button[data-revoke]');
+  if (revoke) {
+    revokeKey(revoke.getAttribute('data-revoke'), revoke);
+  }
+});
+
+customersWrap.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (!form || form.tagName !== 'FORM') return;
+  event.preventDefault();
+  if (!getAdminToken()) {
+    setStatus('需要 ADMIN_TOKEN。', 'error');
+    return;
+  }
+  const kind = form.getAttribute('data-form');
+  const cid = form.getAttribute('data-customer');
+  if (kind === 'issue') issueKey(cid, form);
+  else if (kind === 'grant') grantToCustomer(cid, form);
+});
+
 if (getAdminToken()) {
   loadOverview();
-}
-</script>
+}</script>
 </body>
 </html>
