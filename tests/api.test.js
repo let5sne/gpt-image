@@ -1323,3 +1323,514 @@ test('POST /api/generate releases reserved credits when upstream fails', async (
     global.fetch = originalFetch;
   }
 });
+
+// ── 客户 API (V1) 测试 ─────────────────────────────────
+function setupV1Env() {
+  setBaseEnv();
+  delete process.env.API_KEY_RATE_LIMIT_MAX;
+  delete process.env.API_KEY_RATE_LIMIT_WINDOW_MS;
+  delete process.env.API_CUSTOMER_MAX_CONCURRENT_JOBS;
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.IMAGE_PROVIDER = 'replicate';
+  process.env.REPLICATE_API_TOKEN = 'replicate-token';
+  process.env.REPLICATE_POLL_INTERVAL_MS = '1';
+  process.env.REPLICATE_MAX_POLL_MS = '1000';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  return creditsFile;
+}
+
+async function provisionCustomer(app, { credits = 0, name = 'Acme Co' } = {}) {
+  const created = await request(app)
+    .post('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name });
+  const customerId = created.body.data.id;
+
+  const keyRes = await request(app)
+    .post(`/api/admin/api-customers/${customerId}/api-keys`)
+    .set('x-admin-token', 'admin-secret')
+    .send({});
+  const apiKey = keyRes.body.data.api_key;
+
+  if (credits > 0) {
+    await request(app)
+      .post(`/api/admin/api-customers/${customerId}/credits/grant`)
+      .set('x-admin-token', 'admin-secret')
+      .send({ credits });
+  }
+  return { customerId, apiKey, keyId: keyRes.body.data.key.id };
+}
+
+const REPLICATE_CREATE_URL = 'https://api.replicate.com/v1/models/openai/gpt-image-2/predictions';
+
+function makeReplicateMock(calls, { createOk = true, predictionId = 'pred-v1', finalStatus = 'succeeded' } = {}) {
+  return async (url, options = {}) => {
+    const urlText = String(url);
+    calls.push({ url: urlText, options });
+    if (urlText === REPLICATE_CREATE_URL) {
+      if (!createOk) {
+        return { ok: false, status: 422, async json() { return { detail: 'bad input' }; }, async text() { return ''; } };
+      }
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return { id: predictionId, status: 'starting', urls: { get: `https://api.replicate.com/v1/predictions/${predictionId}` } };
+        },
+        async text() { return ''; },
+      };
+    }
+    if (urlText === `https://api.replicate.com/v1/predictions/${predictionId}`) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return finalStatus === 'succeeded'
+            ? { id: predictionId, status: 'succeeded', output: { image: 'https://replicate.delivery/pbxt/v1-image.png' } }
+            : { id: predictionId, status: finalStatus };
+        },
+        async text() { return ''; },
+      };
+    }
+    if (urlText === 'https://replicate.delivery/pbxt/v1-image.png') {
+      return { ok: true, status: 200, async arrayBuffer() { return Buffer.from('png-bytes'); } };
+    }
+    throw new Error(`unexpected fetch ${urlText}`);
+  };
+}
+
+test('admin creates api customer with empty wallet and no keys', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+
+  const missingName = await request(app)
+    .post('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: '   ' });
+  assert.equal(missingName.status, 400);
+  assert.equal(missingName.body.error.code, 'invalid_name');
+
+  const created = await request(app)
+    .post('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'Acme Co', contact: 'ops@acme.test' });
+
+  assert.equal(created.status, 201);
+  assert.equal(created.body.success, true);
+  assert.equal(created.body.data.name, 'Acme Co');
+  assert.equal(created.body.data.wallet.available_credits, 0);
+  assert.equal(created.body.data.wallet.reserved_credits, 0);
+  assert.deepEqual(created.body.data.api_keys, []);
+});
+
+test('admin api-customers endpoints require admin token', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const unauth = await request(app).post('/api/admin/api-customers').send({ name: 'X' });
+  assert.equal(unauth.status, 401);
+  const unauthList = await request(app).get('/api/admin/api-customers');
+  assert.equal(unauthList.status, 401);
+});
+
+test('api key plaintext only appears on creation, list shows prefix only', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const created = await request(app)
+    .post('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'Acme Co' });
+  const customerId = created.body.data.id;
+
+  const keyRes = await request(app)
+    .post(`/api/admin/api-customers/${customerId}/api-keys`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ note: 'primary' });
+
+  assert.equal(keyRes.status, 201);
+  const apiKey = keyRes.body.data.api_key;
+  assert.match(apiKey, /^gim_/);
+  assert.equal(keyRes.body.data.key.note, 'primary');
+  assert.equal(typeof keyRes.body.data.key.key_prefix, 'string');
+
+  const list = await request(app)
+    .get('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret');
+  const customer = list.body.data.customers.find((c) => c.id === customerId);
+  assert.equal(customer.api_keys.length, 1);
+  const listedKey = customer.api_keys[0];
+  assert.equal(listedKey.api_key, undefined);
+  assert.ok(apiKey.startsWith(listedKey.key_prefix));
+  assert.equal(JSON.stringify(list.body).includes(apiKey), false);
+});
+
+test('api-key creation for unknown customer returns 404', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const res = await request(app)
+    .post('/api/admin/api-customers/does-not-exist/api-keys')
+    .set('x-admin-token', 'admin-secret')
+    .send({});
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error.code, 'customer_not_found');
+});
+
+test('v1 generations rejects missing and invalid api keys with 401', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const noKey = await request(app).post('/v1/images/generations').send({ prompt: 'hi' });
+  assert.equal(noKey.status, 401);
+  const badKey = await request(app)
+    .post('/v1/images/generations')
+    .set('Authorization', 'Bearer gim_not-a-real-key')
+    .send({ prompt: 'hi' });
+  assert.equal(badKey.status, 401);
+});
+
+test('revoked api key can no longer call v1', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey, keyId } = await provisionCustomer(app, { credits: 100 });
+
+  const revoked = await request(app)
+    .post(`/api/admin/api-keys/${keyId}/revoke`)
+    .set('x-admin-token', 'admin-secret')
+    .send({});
+  assert.equal(revoked.status, 200);
+  assert.equal(revoked.body.data.revoked, true);
+  assert.equal(revoked.body.data.key_id, keyId);
+
+  const afterRevoke = await request(app)
+    .post('/v1/images/generations')
+    .set('Authorization', `Bearer ${apiKey}`)
+    .send({ prompt: 'hi' });
+  assert.equal(afterRevoke.status, 401);
+});
+
+test('revoking unknown api key returns 404', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const res = await request(app)
+    .post('/api/admin/api-keys/missing-id/revoke')
+    .set('x-admin-token', 'admin-secret')
+    .send({});
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error.code, 'key_not_found');
+});
+
+test('web user token cannot call v1 generations', async () => {
+  setupV1Env();
+  seedCreditsFile(process.env.CREDITS_FILE);
+  const app = loadFreshApp();
+  const redeemed = await request(app).post('/api/redeem').send({ code: 'TEST-CODE-100' });
+  const userToken = redeemed.body.data.user_token;
+
+  const res = await request(app)
+    .post('/v1/images/generations')
+    .set('x-user-token', userToken)
+    .send({ prompt: 'hi' });
+  assert.equal(res.status, 401);
+});
+
+test('api key cannot call admin endpoints', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 100 });
+  const res = await request(app)
+    .get('/api/admin/api-customers')
+    .set('Authorization', `Bearer ${apiKey}`);
+  assert.equal(res.status, 401);
+});
+
+test('v1 generations charges 20 credits and completes job', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { customerId, apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-v1', finalStatus: 'succeeded' });
+  try {
+    const created = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'a sunset over mountains', aspect_ratio: '3:2' });
+
+    assert.equal(created.status, 202);
+    assert.equal(created.body.success, true);
+    assert.equal(created.body.data.charged_credits, 20);
+    assert.equal(created.body.data.poll_url, `/v1/images/jobs/${created.body.data.id}`);
+
+    const createCall = calls.find((c) => c.url === REPLICATE_CREATE_URL);
+    assert.ok(createCall);
+    assert.equal(JSON.parse(createCall.options.body).input.aspect_ratio, '3:2');
+
+    const jobId = created.body.data.id;
+    const completed = await waitFor(async () => {
+      const res = await request(app)
+        .get(`/v1/images/jobs/${jobId}`)
+        .set('Authorization', `Bearer ${apiKey}`);
+      if (res.body.data && res.body.data.status === 'succeeded') return res;
+      return null;
+    });
+    assert.equal(completed.status, 200);
+    assert.equal(completed.body.data.aspect_ratio, '3:2');
+    assert.equal(completed.body.data.images.length, 1);
+
+    const list = await request(app)
+      .get('/api/admin/api-customers')
+      .set('x-admin-token', 'admin-secret');
+    const customer = list.body.data.customers.find((c) => c.id === customerId);
+    assert.equal(customer.wallet.available_credits, 80);
+    assert.equal(customer.wallet.reserved_credits, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 generations returns 402 when balance is insufficient and creates no job', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 10 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls);
+  try {
+    const res = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'hello world' });
+    assert.equal(res.status, 402);
+    assert.equal(res.body.error.code, 'insufficient_credits');
+    assert.equal(res.body.error.details.required_credits, 20);
+    assert.equal(res.body.error.details.available_credits, 10);
+    assert.equal(calls.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 generations releases credits when replicate create fails', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { customerId, apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { createOk: false });
+  try {
+    const res = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'hello world' });
+    assert.equal(res.status, 502);
+    assert.equal(res.body.error.code, 'upstream_failed');
+
+    const list = await request(app)
+      .get('/api/admin/api-customers')
+      .set('x-admin-token', 'admin-secret');
+    const customer = list.body.data.customers.find((c) => c.id === customerId);
+    assert.equal(customer.wallet.available_credits, 100);
+    assert.equal(customer.wallet.reserved_credits, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 jobs are isolated across customers', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const customerA = await provisionCustomer(app, { credits: 100, name: 'A Co' });
+  const customerB = await provisionCustomer(app, { credits: 100, name: 'B Co' });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-iso', finalStatus: 'succeeded' });
+  try {
+    const created = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${customerA.apiKey}`)
+      .send({ prompt: 'shared secret art' });
+    assert.equal(created.status, 202);
+    const jobId = created.body.data.id;
+
+    const ownerView = await request(app)
+      .get(`/v1/images/jobs/${jobId}`)
+      .set('Authorization', `Bearer ${customerA.apiKey}`);
+    assert.equal(ownerView.status, 200);
+
+    const otherView = await request(app)
+      .get(`/v1/images/jobs/${jobId}`)
+      .set('Authorization', `Bearer ${customerB.apiKey}`);
+    assert.equal(otherView.status, 404);
+    assert.equal(otherView.body.error.code, 'job_not_found');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 generations enforces per-key rate limit', async () => {
+  setupV1Env();
+  process.env.API_KEY_RATE_LIMIT_MAX = '2';
+  const app = loadFreshApp();
+  // grant 0 credits so requests stop at reservation (402) and never call replicate
+  const { apiKey } = await provisionCustomer(app, { credits: 0 });
+
+  const first = await request(app)
+    .post('/v1/images/generations')
+    .set('Authorization', `Bearer ${apiKey}`)
+    .send({ prompt: 'one' });
+  assert.equal(first.status, 402);
+
+  const second = await request(app)
+    .post('/v1/images/generations')
+    .set('Authorization', `Bearer ${apiKey}`)
+    .send({ prompt: 'two' });
+  assert.equal(second.status, 402);
+
+  const third = await request(app)
+    .post('/v1/images/generations')
+    .set('Authorization', `Bearer ${apiKey}`)
+    .send({ prompt: 'three' });
+  assert.equal(third.status, 429);
+  assert.equal(third.body.error.code, 'rate_limited');
+});
+
+test('v1 generations enforces per-customer concurrency limit', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  // job stays in non-terminal "starting" state so it counts as active
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-conc', finalStatus: 'starting' });
+  try {
+    const first = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'first job' });
+    assert.equal(first.status, 202);
+
+    const firstId = first.body.data.id;
+    await waitFor(async () => {
+      const res = await request(app)
+        .get(`/v1/images/jobs/${firstId}`)
+        .set('Authorization', `Bearer ${apiKey}`);
+      return res.body.data && res.body.data.status === 'starting' ? res : null;
+    });
+
+    const second = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'second job' });
+    assert.equal(second.status, 409);
+    assert.equal(second.body.error.code, 'api_concurrency_limited');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 generations validates prompt and aspect ratio inputs', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 100 });
+  const auth = (req) => req.set('Authorization', `Bearer ${apiKey}`);
+
+  const notString = await auth(request(app).post('/v1/images/generations')).send({ prompt: 123 });
+  assert.equal(notString.status, 400);
+  assert.equal(notString.body.error.code, 'invalid_prompt');
+
+  const empty = await auth(request(app).post('/v1/images/generations')).send({ prompt: '   ' });
+  assert.equal(empty.status, 400);
+  assert.equal(empty.body.error.code, 'invalid_prompt');
+
+  const tooLong = await auth(request(app).post('/v1/images/generations'))
+    .send({ prompt: 'x'.repeat(5000) });
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.body.error.code, 'prompt_too_long');
+
+  const badAr = await auth(request(app).post('/v1/images/generations'))
+    .send({ prompt: 'ok', aspect_ratio: '16:9' });
+  assert.equal(badAr.status, 400);
+  assert.equal(badAr.body.error.code, 'invalid_aspect_ratio');
+});
+
+test('web /api/jobs/:id does not expose api customer jobs', async () => {
+  setupV1Env();
+  process.env.AUTH_REQUIRED = 'false';
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-leak', finalStatus: 'succeeded' });
+  try {
+    const created = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'private customer art' });
+    assert.equal(created.status, 202);
+    const jobId = created.body.data.id;
+
+    // 即使知道 job id,网页接口也必须 404,不泄露 API 客户任务。
+    const leak = await request(app).get(`/api/jobs/${jobId}`);
+    assert.equal(leak.status, 404);
+    assert.equal(leak.body.error.code, 'job_not_found');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('v1 failed job reports charged_credits as 0 after release', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-fail', finalStatus: 'failed' });
+  try {
+    const created = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'doomed art' });
+    assert.equal(created.status, 202);
+    const jobId = created.body.data.id;
+
+    const finalView = await waitFor(async () => {
+      const res = await request(app)
+        .get(`/v1/images/jobs/${jobId}`)
+        .set('Authorization', `Bearer ${apiKey}`);
+      return ['failed', 'canceled', 'timed_out'].includes(res.body.data.status) ? res : null;
+    });
+    assert.equal(finalView.body.data.charged_credits, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('api-key creation rejects invalid and past expires_at', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const created = await request(app)
+    .post('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'Expiry Co' });
+  const customerId = created.body.data.id;
+
+  const invalid = await request(app)
+    .post(`/api/admin/api-customers/${customerId}/api-keys`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ expires_at: 'not-a-date' });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, 'invalid_expires_at');
+
+  const past = await request(app)
+    .post(`/api/admin/api-customers/${customerId}/api-keys`)
+    .set('x-admin-token', 'admin-secret')
+    .send({ expires_at: '2000-01-01T00:00:00Z' });
+  assert.equal(past.status, 400);
+  assert.equal(past.body.error.code, 'invalid_expires_at');
+});

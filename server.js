@@ -198,6 +198,13 @@ const CREDIT_COSTS = {
 const ADMIN_GRANT_MAX_CREDITS = Number(process.env.ADMIN_GRANT_MAX_CREDITS || 10000);
 const ADMIN_BATCH_MAX_CODES = Number(process.env.ADMIN_BATCH_MAX_CODES || 5000);
 const ADMIN_BATCH_MAX_CREDITS_PER_CODE = Number(process.env.ADMIN_BATCH_MAX_CREDITS_PER_CODE || 100000);
+const API_KEY_RATE_LIMIT_WINDOW_MS = Number(process.env.API_KEY_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+const API_KEY_RATE_LIMIT_MAX = Number(process.env.API_KEY_RATE_LIMIT_MAX || 5);
+// 无效配置会让并发比较恒为 false,等于关闭限制 —— 解析失败时回落到默认 1。
+const API_CUSTOMER_MAX_CONCURRENT_JOBS = (() => {
+  const parsed = Number(process.env.API_CUSTOMER_MAX_CONCURRENT_JOBS || 1);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+})();
 
 const dailyUsage = new Map();
 const jobs = new Map();
@@ -466,6 +473,8 @@ function emptyCreditsState() {
     credit_ledger: [],
     redemption_batches: [],
     redemption_codes: [],
+    api_customers: [],
+    api_keys: [],
   };
 }
 
@@ -1113,35 +1122,28 @@ function getCreditCost(quality, n) {
   };
 }
 
-function reserveCreditsForRequest(req, res, quality, n) {
+function reserveCreditsForUserId(userId, quality, n) {
   if (!CREDITS_ENABLED) return null;
   return creditsRepository.withLock(() => {
-    const userToken = getUserToken(req);
     const state = creditsRepository.readState();
-    const user = findUserByToken(state, userToken);
-    if (!user) {
-      sendError(res, req, 401, 'wallet_required', 'redeem a code before generating images');
-      return false;
-    }
-    const account = getAccount(state, user.id);
+    const account = getAccount(state, userId);
     if (!account) {
-      sendError(res, req, 401, 'wallet_required', 'wallet not found');
-      return false;
+      return { error: 'wallet_required' };
     }
 
     const cost = getCreditCost(quality, n);
     if (account.available_credits < cost.credits) {
-      sendError(res, req, 402, 'insufficient_credits', 'not enough credits', {
+      return {
+        error: 'insufficient_credits',
         required_credits: cost.credits,
         available_credits: account.available_credits,
-      });
-      return false;
+      };
     }
 
     const reservationId = crypto.randomUUID();
     account.available_credits -= cost.credits;
     account.reserved_credits += cost.credits;
-    appendLedger(state, user.id, 'reserve', -cost.credits, account, {
+    appendLedger(state, userId, 'reserve', -cost.credits, account, {
       jobId: reservationId,
       note: `quality=${cost.quality}`,
     });
@@ -1149,10 +1151,35 @@ function reserveCreditsForRequest(req, res, quality, n) {
 
     return {
       id: reservationId,
-      userId: user.id,
+      userId,
       quality: cost.quality,
       credits: cost.credits,
     };
+  });
+}
+
+function reserveCreditsForRequest(req, res, quality, n) {
+  if (!CREDITS_ENABLED) return null;
+  const state = creditsRepository.readState();
+  const user = findUserByToken(state, getUserToken(req));
+  if (!user) {
+    sendError(res, req, 401, 'wallet_required', 'redeem a code before generating images');
+    return false;
+  }
+
+  return reserveCreditsForUserId(user.id, quality, n).then((reservation) => {
+    if (reservation && reservation.error === 'wallet_required') {
+      sendError(res, req, 401, 'wallet_required', 'wallet not found');
+      return false;
+    }
+    if (reservation && reservation.error === 'insufficient_credits') {
+      sendError(res, req, 402, 'insufficient_credits', 'not enough credits', {
+        required_credits: reservation.required_credits,
+        available_credits: reservation.available_credits,
+      });
+      return false;
+    }
+    return reservation;
   });
 }
 
@@ -1203,6 +1230,157 @@ function grantCreditsToUserToken(userToken, credits, note) {
     creditsRepository.writeState(state);
 
     return serializeWallet(state, user.id);
+  });
+}
+
+function grantCreditsToUserId(userId, credits, note) {
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
+    const account = getAccount(state, userId);
+    if (!account) return null;
+
+    account.available_credits += credits;
+    account.updated_at = new Date().toISOString();
+    appendLedger(state, userId, 'admin_grant', credits, account, { note });
+    creditsRepository.writeState(state);
+
+    return serializeWallet(state, userId);
+  });
+}
+
+function createApiSecret() {
+  return `gim_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function serializeApiCustomer(state, customer) {
+  const account = customer ? getAccount(state, customer.user_id) : null;
+  const keys = (state.api_keys || []).filter((item) => item.customer_id === customer.id);
+  return {
+    id: customer.id,
+    name: customer.name,
+    contact: customer.contact || '',
+    status: customer.status || 'active',
+    note: customer.note || '',
+    user_id: customer.user_id,
+    wallet: {
+      available_credits: account ? account.available_credits : 0,
+      reserved_credits: account ? account.reserved_credits : 0,
+    },
+    api_keys: keys.map((item) => ({
+      id: item.id,
+      key_prefix: item.key_prefix,
+      status: item.status,
+      expires_at: item.expires_at || null,
+      last_used_at: item.last_used_at || null,
+      created_at: item.created_at,
+      note: item.note || '',
+    })),
+    created_at: customer.created_at,
+    updated_at: customer.updated_at,
+  };
+}
+
+function createApiCustomer({ name, contact = '', note = '' }) {
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
+    const now = new Date().toISOString();
+    const user = {
+      id: crypto.randomUUID(),
+      user_token_hash: null,
+      api_customer_id: null,
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    };
+    const customer = {
+      id: crypto.randomUUID(),
+      name,
+      contact,
+      status: 'active',
+      note,
+      user_id: user.id,
+      created_at: now,
+      updated_at: now,
+    };
+    user.api_customer_id = customer.id;
+    state.users.push(user);
+    state.accounts.push({
+      id: crypto.randomUUID(),
+      user_id: user.id,
+      available_credits: 0,
+      reserved_credits: 0,
+      created_at: now,
+      updated_at: now,
+    });
+    state.api_customers.push(customer);
+    creditsRepository.writeState(state);
+    return serializeApiCustomer(state, customer);
+  });
+}
+
+function createApiKeyForCustomer(customerId, { note = '', expiresAt = null } = {}) {
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
+    const customer = (state.api_customers || []).find((item) => item.id === customerId);
+    if (!customer) return null;
+
+    const secret = createApiSecret();
+    const now = new Date().toISOString();
+    const key = {
+      id: crypto.randomUUID(),
+      customer_id: customer.id,
+      key_hash: hashSecret(secret),
+      key_prefix: secret.slice(0, 12),
+      status: 'active',
+      expires_at: expiresAt || null,
+      note,
+      created_at: now,
+      last_used_at: null,
+    };
+    state.api_keys.push(key);
+    customer.updated_at = now;
+    creditsRepository.writeState(state);
+    return {
+      api_key: secret,
+      key: serializeApiCustomer(state, customer).api_keys.find((item) => item.id === key.id),
+    };
+  });
+}
+
+function revokeApiKey(keyId) {
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
+    const key = (state.api_keys || []).find((item) => item.id === keyId);
+    if (!key) return null;
+    key.status = 'revoked';
+    key.revoked_at = new Date().toISOString();
+    creditsRepository.writeState(state);
+    return key;
+  });
+}
+
+function authenticateApiKey(secret) {
+  if (!secret) return null;
+  const state = creditsRepository.readState();
+  const keyHash = hashSecret(secret);
+  const key = (state.api_keys || []).find((item) => item.key_hash === keyHash) || null;
+  if (!key || key.status !== 'active') return null;
+  if (key.expires_at && new Date(key.expires_at).getTime() < Date.now()) return null;
+  const customer = (state.api_customers || []).find((item) => item.id === key.customer_id) || null;
+  if (!customer || customer.status !== 'active') return null;
+  const account = getAccount(state, customer.user_id);
+  if (!account) return null;
+  return { state, key, customer, account };
+}
+
+function touchApiKey(keyId) {
+  return creditsRepository.withLock(() => {
+    const state = creditsRepository.readState();
+    const key = (state.api_keys || []).find((item) => item.id === keyId);
+    if (!key) return null;
+    key.last_used_at = new Date().toISOString();
+    creditsRepository.writeState(state);
+    return key;
   });
 }
 
@@ -1394,6 +1572,16 @@ function mapSizeToAspectRatio(size) {
   if (size === '1024x1536') return '2:3';
   if (size === '1536x1024') return '3:2';
   return '1:1';
+}
+
+function mapAspectRatioToSize(aspectRatio) {
+  if (aspectRatio === '2:3') return '1024x1536';
+  if (aspectRatio === '3:2') return '1536x1024';
+  return '1024x1024';
+}
+
+function normalizeAspectRatio(value) {
+  return ['1:1', '2:3', '3:2'].includes(value) ? value : null;
 }
 
 function getReplicateCreateUrl() {
@@ -1649,6 +1837,119 @@ function serializeJob(job) {
   };
 }
 
+function countActiveApiJobsForCustomer(customerId) {
+  let count = 0;
+  for (const job of jobs.values()) {
+    if (job.apiCustomerId === customerId && !isTerminalJobStatus(job.status)) count += 1;
+  }
+  return count;
+}
+
+function serializeV1Job(job) {
+  const base = serializeJob(job);
+  return {
+    id: job.id,
+    status: job.status,
+    provider: base.provider,
+    model: base.model,
+    aspect_ratio: mapSizeToAspectRatio(job.size),
+    images: base.images,
+    error: base.error,
+    estimated_credits: base.estimated_credits,
+    // 仅在成功结算后才报告实扣;失败/超时已释放 credits,这里保持 0,避免账单与钱包不一致。
+    charged_credits: base.charged_credits || 0,
+    created_at: base.created_at,
+    updated_at: base.updated_at,
+  };
+}
+
+async function createReplicateImageJob(req, {
+  prompt,
+  size,
+  n,
+  quality,
+  creditReservation,
+  apiCustomerId = null,
+  apiKeyId = null,
+}) {
+  const model = REPLICATE_MODEL;
+  const outputFormat = 'png';
+  const createUrl = getReplicateCreateUrl();
+  const response = await fetch(createUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}`,
+      Prefer: 'respond-async',
+    },
+    body: JSON.stringify({
+      input: {
+        prompt,
+        aspect_ratio: mapSizeToAspectRatio(size),
+        number_of_images: n,
+        quality: process.env.REPLICATE_QUALITY || quality || 'auto',
+        background: process.env.REPLICATE_BACKGROUND || 'auto',
+        moderation: process.env.REPLICATE_MODERATION || 'auto',
+        output_format: outputFormat,
+        output_compression: Number(process.env.REPLICATE_OUTPUT_COMPRESSION || 90),
+      },
+    }),
+  });
+
+  const prediction = await response.json();
+  if (!response.ok) {
+    await safeReleaseCredits(creditReservation, 'replicate create failed', req.requestId);
+    log('error', 'replicate_create_error', {
+      request_id: req.requestId,
+      status: response.status,
+      body: JSON.stringify(prediction).slice(0, 500),
+    });
+    return { error: 'upstream_failed' };
+  }
+
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId,
+    provider: 'replicate',
+    predictionId: prediction.id,
+    getUrl: prediction.urls && prediction.urls.get ? prediction.urls.get : `https://api.replicate.com/v1/predictions/${prediction.id}`,
+    status: prediction.status || 'starting',
+    prompt,
+    size,
+    outputFormat,
+    creditReservation,
+    requestId: req.requestId,
+    apiCustomerId,
+    apiKeyId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    prediction,
+    images: [],
+  };
+  persistJob(job);
+  pollReplicateJob(jobId).catch((e) => {
+    const current = jobs.get(jobId);
+    if (current) {
+      current.status = 'failed';
+      current.error = e.message;
+      current.updatedAt = Date.now();
+      persistJob(current);
+    }
+  });
+
+  log('info', 'replicate_job_created', {
+    request_id: req.requestId,
+    job_id: jobId,
+    prediction_id: prediction.id,
+    api_customer_id: apiCustomerId,
+    status: job.status,
+    size,
+    model,
+  });
+
+  return { job };
+}
+
 function restoreStoredJobs() {
   if (!ENABLE_LOCAL_STORAGE || PROVIDER_CONFIG.kind !== 'replicate') return;
 
@@ -1762,6 +2063,28 @@ function requireAdminAuth(req, res, next) {
   if (!sameToken(token, ADMIN_TOKEN)) {
     return sendError(res, req, 401, 'unauthorized', 'missing or invalid admin token');
   }
+  return next();
+}
+
+function requireApiKeyAuth(req, res, next) {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const token = readTokenFromRequest(req);
+  const auth = authenticateApiKey(token);
+  if (!auth) {
+    return sendError(res, req, 401, 'unauthorized', 'missing or invalid API key');
+  }
+  req.apiCustomer = auth.customer;
+  req.apiKey = auth.key;
+  req.apiUserId = auth.customer.user_id;
+  touchApiKey(auth.key.id).catch((err) => {
+    log('error', 'api_key_touch_failed', {
+      request_id: req.requestId,
+      api_key_id: auth.key.id,
+      message: err.message,
+    });
+  });
   return next();
 }
 
@@ -1881,6 +2204,17 @@ const generateRateLimiter = rateLimit({
   keyGenerator: (req) => getClientKey(req),
   handler: (req, res) => {
     sendError(res, req, 429, 'rate_limited', 'too many requests, please retry later');
+  },
+});
+
+const apiKeyRateLimiter = rateLimit({
+  windowMs: API_KEY_RATE_LIMIT_WINDOW_MS,
+  max: API_KEY_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.apiKey ? `api-key:${req.apiKey.id}` : getClientKey(req),
+  handler: (req, res) => {
+    sendError(res, req, 429, 'rate_limited', 'too many API requests, please retry later');
   },
 });
 
@@ -2351,6 +2685,138 @@ app.post('/api/admin/redemption-codes/:id/revoke', requireAdminAuth, async (req,
   });
 });
 
+// ── 客户 API：Admin 管理路由 ───────────────────────────
+app.post('/api/admin/api-customers', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const name = req.body && typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  const contact = req.body && typeof req.body.contact === 'string' ? req.body.contact.trim().slice(0, 200) : '';
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : '';
+  if (!name) {
+    return sendError(res, req, 400, 'invalid_name', 'name is required');
+  }
+
+  const customer = await createApiCustomer({ name, contact, note });
+
+  log('info', 'admin_api_customer_created', {
+    request_id: req.requestId,
+    customer_id: customer.id,
+  });
+  appendAdminAudit('admin_api_customer_create', req, {
+    customer_id: customer.id,
+  });
+
+  return sendOk(res, req, customer, 201);
+});
+
+app.get('/api/admin/api-customers', requireAdminAuth, (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const state = creditsRepository.readState();
+  const customers = (state.api_customers || []).map((customer) => serializeApiCustomer(state, customer));
+  return sendOk(res, req, { customers });
+});
+
+app.post('/api/admin/api-customers/:id/api-keys', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : '';
+  const rawExpiresAt = req.body && typeof req.body.expires_at === 'string' ? req.body.expires_at.trim() : '';
+  let expiresAt = null;
+  if (rawExpiresAt) {
+    const parsed = Date.parse(rawExpiresAt);
+    // 无效日期会让鉴权处的 `NaN < now` 恒为 false,等于 key 永不过期 —— 必须显式拒绝。
+    if (Number.isNaN(parsed)) {
+      return sendError(res, req, 400, 'invalid_expires_at', 'expires_at must be a valid ISO date');
+    }
+    if (parsed <= Date.now()) {
+      return sendError(res, req, 400, 'invalid_expires_at', 'expires_at must be in the future');
+    }
+    expiresAt = new Date(parsed).toISOString();
+  }
+
+  const result = await createApiKeyForCustomer(req.params.id, { note, expiresAt });
+  if (!result) {
+    return sendError(res, req, 404, 'customer_not_found', 'api customer not found');
+  }
+
+  log('info', 'admin_api_key_created', {
+    request_id: req.requestId,
+    customer_id: req.params.id,
+    key_id: result.key.id,
+  });
+  appendAdminAudit('admin_api_key_create', req, {
+    customer_id: req.params.id,
+  });
+
+  return sendOk(res, req, result, 201);
+});
+
+app.post('/api/admin/api-customers/:id/credits/grant', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const credits = req.body ? req.body.credits : null;
+  const note = req.body && typeof req.body.note === 'string' ? req.body.note.trim().slice(0, 200) : 'admin grant';
+  if (!Number.isInteger(credits) || credits < 1 || credits > ADMIN_GRANT_MAX_CREDITS) {
+    return sendError(res, req, 400, 'invalid_credits', `credits must be an integer between 1 and ${ADMIN_GRANT_MAX_CREDITS}`);
+  }
+
+  const state = creditsRepository.readState();
+  const customer = (state.api_customers || []).find((item) => item.id === req.params.id);
+  if (!customer) {
+    return sendError(res, req, 404, 'customer_not_found', 'api customer not found');
+  }
+
+  const wallet = await grantCreditsToUserId(customer.user_id, credits, note || 'admin grant');
+  if (!wallet) {
+    return sendError(res, req, 404, 'wallet_not_found', 'wallet not found');
+  }
+
+  log('info', 'admin_api_customer_granted', {
+    request_id: req.requestId,
+    customer_id: req.params.id,
+    credits,
+    note_hash: sha256Hex(note || 'admin grant').slice(0, 12),
+  });
+  appendAdminAudit('admin_api_customer_grant', req, {
+    customer_id: req.params.id,
+    credits,
+    note_hash: sha256Hex(note || 'admin grant').slice(0, 12),
+  });
+
+  return sendOk(res, req, {
+    credits_added: credits,
+    wallet,
+  });
+});
+
+app.post('/api/admin/api-keys/:id/revoke', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const key = await revokeApiKey(req.params.id);
+  if (!key) {
+    return sendError(res, req, 404, 'key_not_found', 'api key not found');
+  }
+
+  log('info', 'admin_api_key_revoked', {
+    request_id: req.requestId,
+    key_id: req.params.id,
+  });
+  appendAdminAudit('admin_api_key_revoke', req, {
+    key_id: req.params.id,
+  });
+
+  return sendOk(res, req, {
+    revoked: true,
+    key_id: req.params.id,
+  });
+});
+
 app.post('/api/redeem', async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
@@ -2442,7 +2908,8 @@ app.get('/api/wallet', (req, res) => {
 
 app.get('/api/jobs/:id', requireAuth, (req, res) => {
   const job = jobs.get(req.params.id);
-  if (!job) {
+  // API 客户的任务必须经 /v1/images/jobs/:id 查询;网页接口不暴露其归属信息,避免跨客户读取。
+  if (!job || job.apiCustomerId) {
     return sendError(res, req, 404, 'job_not_found', 'job not found');
   }
   return sendOk(res, req, serializeJob(job));
@@ -2509,79 +2976,17 @@ app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => 
 
   if (PROVIDER_CONFIG.kind === 'replicate') {
     try {
-      const model = REPLICATE_MODEL;
-      const outputFormat = 'png';
-      const createUrl = getReplicateCreateUrl();
-      const response = await fetch(createUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}`,
-          Prefer: 'respond-async',
-        },
-        body: JSON.stringify({
-          input: {
-            prompt: normalizedPrompt,
-            aspect_ratio: mapSizeToAspectRatio(size),
-            number_of_images: n,
-            quality: process.env.REPLICATE_QUALITY || 'auto',
-            background: process.env.REPLICATE_BACKGROUND || 'auto',
-            moderation: process.env.REPLICATE_MODERATION || 'auto',
-            output_format: outputFormat,
-            output_compression: Number(process.env.REPLICATE_OUTPUT_COMPRESSION || 90),
-          },
-        }),
-      });
-
-      const prediction = await response.json();
-      if (!response.ok) {
-        await safeReleaseCredits(creditReservation, 'replicate create failed', req.requestId);
-        log('error', 'replicate_create_error', {
-          request_id: req.requestId,
-          status: response.status,
-          body: JSON.stringify(prediction).slice(0, 500),
-        });
-        return sendError(res, req, 502, 'upstream_failed', 'unable to create replicate prediction');
-      }
-
-      const jobId = crypto.randomUUID();
-      const job = {
-        id: jobId,
-        provider: 'replicate',
-        predictionId: prediction.id,
-        getUrl: prediction.urls && prediction.urls.get ? prediction.urls.get : `https://api.replicate.com/v1/predictions/${prediction.id}`,
-        status: prediction.status || 'starting',
+      const created = await createReplicateImageJob(req, {
         prompt: normalizedPrompt,
         size,
-        outputFormat,
+        n,
+        quality,
         creditReservation,
-        requestId: req.requestId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        prediction,
-        images: [],
-      };
-      persistJob(job);
-      pollReplicateJob(jobId).catch((e) => {
-        const current = jobs.get(jobId);
-        if (current) {
-          current.status = 'failed';
-          current.error = e.message;
-          current.updatedAt = Date.now();
-          persistJob(current);
-        }
       });
-
-      log('info', 'replicate_job_created', {
-        request_id: req.requestId,
-        job_id: jobId,
-        prediction_id: prediction.id,
-        status: job.status,
-        size,
-        model,
-      });
-
-      return sendOk(res, req, serializeJob(job), 202);
+      if (created.error) {
+        return sendError(res, req, 502, 'upstream_failed', 'unable to create replicate prediction');
+      }
+      return sendOk(res, req, serializeJob(created.job), 202);
     } catch (e) {
       await safeReleaseCredits(creditReservation, 'replicate create exception', req.requestId);
       log('error', 'replicate_create_exception', {
@@ -2762,6 +3167,90 @@ app.get('/api/gallery', (_req, res) => {
   }
   const meta = readMeta();
   return res.json({ success: true, data: meta.slice().reverse(), request_id: null });
+});
+
+// ── 客户 API：V1 生图接口 ──────────────────────────────
+app.post('/v1/images/generations', requireApiKeyAuth, apiKeyRateLimiter, async (req, res) => {
+  const prompt = req.body ? req.body.prompt : undefined;
+  if (typeof prompt !== 'string') {
+    return sendError(res, req, 400, 'invalid_prompt', 'prompt must be a string');
+  }
+  const normalizedPrompt = prompt.trim();
+  if (!normalizedPrompt) {
+    return sendError(res, req, 400, 'invalid_prompt', 'prompt is required');
+  }
+  if (normalizedPrompt.length > MAX_PROMPT_CHARS) {
+    return sendError(res, req, 400, 'prompt_too_long', `prompt too long (max ${MAX_PROMPT_CHARS} chars)`);
+  }
+
+  const ar = normalizeAspectRatio((req.body && req.body.aspect_ratio) || '1:1');
+  if (!ar) {
+    return sendError(res, req, 400, 'invalid_aspect_ratio', 'unsupported aspect ratio');
+  }
+  const size = mapAspectRatioToSize(ar);
+
+  if (missingEnv.length > 0) {
+    log('error', 'config_error_missing_env', {
+      request_id: req.requestId,
+      missing_env: missingEnv,
+    });
+    return sendError(res, req, 500, 'service_unavailable', 'service unavailable');
+  }
+
+  if (PROVIDER_CONFIG.kind !== 'replicate') {
+    return sendError(res, req, 503, 'provider_unsupported', 'image provider does not support the customer API');
+  }
+
+  if (countActiveApiJobsForCustomer(req.apiCustomer.id) >= API_CUSTOMER_MAX_CONCURRENT_JOBS) {
+    return sendError(res, req, 409, 'api_concurrency_limited', 'previous job still running');
+  }
+
+  const reservation = await reserveCreditsForUserId(req.apiUserId, 'auto', 1);
+  if (reservation && reservation.error === 'wallet_required') {
+    return sendError(res, req, 500, 'internal_error', 'wallet not provisioned');
+  }
+  if (reservation && reservation.error === 'insufficient_credits') {
+    return sendError(res, req, 402, 'insufficient_credits', 'not enough credits', {
+      required_credits: reservation.required_credits,
+      available_credits: reservation.available_credits,
+    });
+  }
+
+  try {
+    const created = await createReplicateImageJob(req, {
+      prompt: normalizedPrompt,
+      size,
+      n: 1,
+      quality: 'auto',
+      creditReservation: reservation,
+      apiCustomerId: req.apiCustomer.id,
+      apiKeyId: req.apiKey.id,
+    });
+    if (created.error) {
+      return sendError(res, req, 502, 'upstream_failed', 'unable to create replicate prediction');
+    }
+    return sendOk(res, req, {
+      id: created.job.id,
+      status: created.job.status,
+      charged_credits: reservation ? reservation.credits : 0,
+      poll_url: `/v1/images/jobs/${created.job.id}`,
+    }, 202);
+  } catch (e) {
+    await safeReleaseCredits(reservation, 'v1 create exception', req.requestId);
+    log('error', 'v1_create_exception', {
+      request_id: req.requestId,
+      message: e.message,
+    });
+    return sendError(res, req, 500, 'internal_error', 'internal error');
+  }
+});
+
+app.get('/v1/images/jobs/:id', requireApiKeyAuth, (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || job.apiCustomerId !== req.apiCustomer.id) {
+    return sendError(res, req, 404, 'job_not_found', 'job not found');
+  }
+  return sendOk(res, req, serializeV1Job(job));
 });
 
 app.use('/api', (req, res) => {
