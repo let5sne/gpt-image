@@ -145,14 +145,10 @@ const ALLOWED_SIZES = new Set([
   '1024x1024',
   '1024x1536',
   '1536x1024',
-  '1920x1080',
-  '2560x1440',
-  '3840x2160',
-  'auto',
 ]);
 const MAX_PROMPT_CHARS = Number(process.env.MAX_PROMPT_CHARS || 4000);
 const MAX_IMAGES_PER_REQUEST = Number(process.env.MAX_IMAGES_PER_REQUEST || 1);
-const MAX_PIXEL_COUNT = Number(process.env.MAX_PIXEL_COUNT || 8300000); // covers 4K (3840x2160)
+const MAX_PIXEL_COUNT = Number(process.env.MAX_PIXEL_COUNT || 1572864); // covers 1024x1536 / 1536x1024
 const DAILY_LIMIT_PER_CLIENT = Number(process.env.DAILY_LIMIT_PER_CLIENT || 40);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60 * 1000);
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 12);
@@ -1397,7 +1393,6 @@ function revokeRedemptionCode(codeId, note) {
 function mapSizeToAspectRatio(size) {
   if (size === '1024x1536') return '2:3';
   if (size === '1536x1024') return '3:2';
-  if (size === '1920x1080' || size === '2560x1440' || size === '3840x2160') return '16:9';
   return '1:1';
 }
 

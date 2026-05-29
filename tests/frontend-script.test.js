@@ -291,6 +291,15 @@ test('index page keeps account login hidden before creation prompt', () => {
   assert.match(html, /无需注册登录。兑换码会在本机保存一个钱包凭证/);
 });
 
+test('index page only exposes Replicate supported aspect ratios', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
+
+  assert.match(html, /value="1024x1024">方图 · 1:1/);
+  assert.match(html, /value="1024x1536">竖版 · 2:3/);
+  assert.match(html, /value="1536x1024">横版 · 3:2/);
+  assert.doesNotMatch(html, /1920x1080|2560x1440|3840x2160|Auto（自动）/);
+});
+
 test('index page updateAuthActionButtons reflects loading and cooldown states', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
   const setButtonStateSource = extractFunctionSource(html, 'setButtonState');

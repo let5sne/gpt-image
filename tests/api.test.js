@@ -156,13 +156,15 @@ test('POST /api/generate rejects unsupported size before upstream call', async (
   setBaseEnv();
   const app = loadFreshApp();
 
-  const res = await request(app)
-    .post('/api/generate')
-    .send({ prompt: 'a valid prompt', size: '9999x9999' });
+  for (const size of ['9999x9999', '1920x1080', '2560x1440', '3840x2160', 'auto']) {
+    const res = await request(app)
+      .post('/api/generate')
+      .send({ prompt: 'a valid prompt', size });
 
-  assert.equal(res.status, 400);
-  assert.equal(res.body.success, false);
-  assert.equal(res.body.error.code, 'invalid_size');
+    assert.equal(res.status, 400);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.error.code, 'invalid_size');
+  }
 });
 
 test('POST /api/generate requires token when auth is enabled', async () => {
