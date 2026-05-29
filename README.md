@@ -402,6 +402,203 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes/<code_id>/revoke \
 
 健康检查。
 
+## 客户 API（V1）
+
+面向白名单客户的对外接口，风格接近 OpenAI：`Authorization: Bearer gim_xxx` 鉴权，异步创建任务 + 轮询查询结果。
+
+### 概述
+
+- 面向白名单客户：开户、充值、发 Key 全部由管理员在后台人工完成，**没有自助注册**。
+- 异步模型：先创建任务（立即返回 `202`），再用 `poll_url` / GET 接口轮询，直到 `status` 变为 `succeeded` 或 `failed`。
+- 计费复用 credits：每张图固定扣 **20 credits**——创建时冻结、成功后结算、失败或超时释放。
+- 比例固定三选一：`1:1`、`2:3`、`3:2`，分别对应 `1024x1024`、`1024x1536`、`1536x1024`。
+- V1 数据落在 JSON storage（`storage/credits.json` 内的 `api_customers` / `api_keys`），不暴露任何供应商成本，对外只体现 credits。
+- 需要服务端开启 credits（`CREDITS_ENABLED=true`），否则所有客户接口返回 `404 credits_disabled`。
+
+### 鉴权
+
+所有 `/v1/*` 接口都要带 API Key：
+
+```bash
+Authorization: Bearer gim_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Key 由管理员通过后台发放，以 `gim_` 开头，明文只在创建时返回一次。
+
+### POST `/v1/images/generations`
+
+创建一张图片生成任务。
+
+请求体：
+
+```json
+{
+  "prompt": "a cozy cabin in the snow, warm light",
+  "aspect_ratio": "1:1",
+  "quality": "auto"
+}
+```
+
+- `prompt`：必填，文本提示词。
+- `aspect_ratio`：可选，仅支持 `1:1` / `2:3` / `3:2`，默认 `1:1`；其他值返回 `400 invalid_aspect_ratio`。
+- `quality`：可选，默认 `auto`；每张固定扣 20 credits。
+
+成功返回 `202`，`data` 在任务序列化字段基础上附带 `poll_url`：
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "f0c2e7a0-...",
+    "status": "queued",
+    "provider": "replicate",
+    "model": "owner/model",
+    "aspect_ratio": "1:1",
+    "images": [],
+    "error": null,
+    "estimated_credits": 20,
+    "charged_credits": 20,
+    "poll_url": "/v1/images/jobs/f0c2e7a0-...",
+    "created_at": "2026-05-29T00:00:00.000Z",
+    "updated_at": null
+  },
+  "request_id": "uuid"
+}
+```
+
+> 创建响应里的 `charged_credits: 20` 表示**本次已冻结**的额度。注意:轮询 `GET /v1/images/jobs/:id` 时,`charged_credits` 只有在任务**成功结算后**才会变为实际扣费;任务仍在进行、失败或超时时为 `0`(冻结额度始终体现在 `estimated_credits`,失败/超时会释放冻结、余额退回)。
+
+curl 示例：
+
+```bash
+curl -X POST http://localhost:3000/v1/images/generations \
+  -H "content-type: application/json" \
+  -H "Authorization: Bearer gim_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -d '{"prompt":"a cozy cabin in the snow","aspect_ratio":"1:1","quality":"auto"}'
+```
+
+### GET `/v1/images/jobs/:id`
+
+轮询任务状态。**只能查询当前 Key 所属客户创建的任务**；查询不属于自己的任务（或不存在的 id）一律返回 `404 job_not_found`，不泄露任务是否存在。
+
+响应（字段与 `serializeV1Job` 一致）：
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "f0c2e7a0-...",
+    "status": "succeeded",
+    "provider": "replicate",
+    "model": "owner/model",
+    "aspect_ratio": "1:1",
+    "images": [
+      { "url": "https://cdn.example.com/images/xxx.png", "b64_json": null, "local_url": null, "prompt": "a cozy cabin in the snow" }
+    ],
+    "error": null,
+    "estimated_credits": 20,
+    "charged_credits": 20,
+    "created_at": "2026-05-29T00:00:00.000Z",
+    "updated_at": "2026-05-29T00:00:12.000Z"
+  },
+  "request_id": "uuid"
+}
+```
+
+- `status`：`queued` / `processing` / `succeeded` / `failed` 等任务状态。
+- `images`：成功后才有内容，每项含 `url`、`b64_json`、`local_url`、`prompt`。
+- `error`：失败时为错误信息，否则为 `null`。
+- `charged_credits`：任务**成功结算后**才是实际扣费(如上例 `succeeded` 时为 20);进行中、失败或超时均为 `0`,失败/超时会释放冻结、余额退回。冻结额度请看 `estimated_credits`。
+
+curl 示例：
+
+```bash
+curl http://localhost:3000/v1/images/jobs/f0c2e7a0-... \
+  -H "Authorization: Bearer gim_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+### 错误码表
+
+| HTTP 状态 | code | 含义 |
+|---|---|---|
+| 400 | `invalid_prompt` | prompt 缺失或不是字符串 |
+| 400 | `prompt_too_long` | prompt 超过长度上限 |
+| 400 | `invalid_aspect_ratio` | 比例不在 `1:1` / `2:3` / `3:2` 之内 |
+| 401 | `unauthorized` | 缺失/无效 Key，**或 Key、客户被禁用**（注意：禁用同样返回 401，不是 403） |
+| 402 | `insufficient_credits` | 余额不足，`data` 含 `required_credits` / `available_credits` |
+| 404 | `credits_disabled` | 服务端未开启 credits（`CREDITS_ENABLED` 非 `true`） |
+| 404 | `job_not_found` | 任务不存在，**或不属于当前客户**（跨客户查询不泄露存在性） |
+| 409 | `api_concurrency_limited` | 当前客户已有未完成任务（默认同时最多 1 个） |
+| 429 | `rate_limited` | 超过频率限制（默认每 Key 每分钟 5 次） |
+
+> 关于 `401`：无论是缺 Key、Key 无效，还是 **Key 或客户被管理员禁用**，统一返回 `401 unauthorized`，不会用 `403` 区分禁用态——避免向调用方泄露账户状态细节。
+
+### 管理接口（管理员）
+
+以下接口用后台 token 鉴权，请求头带 `x-admin-token: $ADMIN_TOKEN`（同样需要 `CREDITS_ENABLED=true`）。
+
+创建客户：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/api-customers \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"name":"Acme Inc","contact":"ops@acme.com","note":"launch partner"}'
+```
+
+查看客户列表（返回每个客户的 `wallet`（可用/冻结余额）与 `api_keys` 摘要——只含 `key_prefix`、`status` 等，**不返回明文 Key**）：
+
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/admin/api-customers
+```
+
+为客户发 API Key（明文 `api_key` **只在此响应返回一次，务必当场保存**）：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/api-customers/<customer_id>/api-keys \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"note":"server-side key"}'
+```
+
+人工充值 credits：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/api-customers/<customer_id>/credits/grant \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"credits":1000,"note":"prepaid topup"}'
+```
+
+禁用某个 Key（被禁用后该 Key 的所有 `/v1/*` 请求返回 `401`）：
+
+```bash
+curl -X POST http://localhost:3000/api/admin/api-keys/<key_id>/revoke \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"note":"manual revoke"}'
+```
+
+### 限流与并发
+
+- **频率限制**：默认每个 Key 每分钟最多 5 次请求，超出返回 `429 rate_limited`。
+- **并发限制**：默认每个客户同时最多 1 个未完成任务，已有任务在跑时再创建返回 `409 api_concurrency_limited`。
+- 三个值都可用环境变量调整：
+
+```bash
+API_KEY_RATE_LIMIT_MAX=5             # 每个 Key 每窗口最大请求数
+API_KEY_RATE_LIMIT_WINDOW_MS=60000   # 频率窗口（毫秒），默认 60s
+API_CUSTOMER_MAX_CONCURRENT_JOBS=1   # 每个客户允许的并发未完成任务数
+```
+
+### V1 已知限制
+
+V1 面向少量白名单客户、单实例 + JSON storage 运行，以下为有意接受的取舍，待客户量增长后随数据库迁移一并加固：
+
+- **并发限制非强一致**：`/v1/images/generations` 的并发检查与任务创建之间存在极小的竞态窗口，理论上同一客户在毫秒级并发下可能短暂突破「同时 1 个任务」。单实例事件循环下风险极低，但不做强保证。
+- **计费结算非幂等**：底层 `settle`/`release` 按预留逐次写账本；若进程在「任务标记成功」与「结算」之间崩溃，该笔冻结 credits 可能需人工核对。生产建议监控 `credits_settle_failed` / `credits_release_failed` 日志。
+- **轮询无写节流**：频繁轮询 `GET /v1/images/jobs/:id` 会更新 Key 的 `last_used_at`，高频轮询建议客户侧间隔 ≥ 1s。
+
 ## Credits 与兑换码
 
 第一版支持人工售卖兑换码：

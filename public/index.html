@@ -80,6 +80,16 @@ h1 em {
   background: var(--gold-dim);
   margin: 18px auto 0;
 }
+.api-docs-link {
+  display: inline-block;
+  margin-top: 16px;
+  font-size: .76rem;
+  letter-spacing: .08em;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color .2s var(--ease-out);
+}
+.api-docs-link:hover { color: var(--gold); }
 
 /* ── Studio Shell ────────────────────────── */
 .studio-shell {
@@ -887,6 +897,7 @@ h2 {
   <span class="eyebrow">AI Creation Studio</span>
   <h1>Image <em>Studio</em></h1>
   <div class="header-rule"></div>
+  <a href="/api-docs.html" class="api-docs-link">客户 API 文档 →</a>
 </header>
 
 <main class="studio-shell">

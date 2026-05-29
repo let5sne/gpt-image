@@ -5,3 +5,11 @@ storage/
 .DS_Store
 
 .vercel
+
+# Local tooling and generated artifacts
+.serena/
+.playwright-cli/
+output/
+tasks/
+db/seed/
+
