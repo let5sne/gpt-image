@@ -61,8 +61,7 @@ test('public HTML inline scripts parse without syntax errors', () => {
   for (const file of files) {
     const html = fs.readFileSync(path.join(publicDir, file), 'utf-8');
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-    assert.ok(scripts.length > 0, `expected at least one inline <script> block in ${file}`);
-
+    // 静态页(如 api-docs.html)可以没有内联脚本;若有,则必须语法正确。
     scripts.forEach((match, index) => {
       const source = match[1];
       assert.doesNotThrow(
@@ -365,4 +364,42 @@ test('index page updateAuthActionButtons reflects loading and cooldown states', 
   assert.equal(buttons.sendCodeBtn.disabled, true);
   assert.equal(buttons.sendCodeBtn.textContent, '暂未开放');
   assert.equal(buttons.verifyCodeBtn.disabled, true);
+});
+
+test('api-docs page documents v1 endpoints, error codes, and links from index', () => {
+  const publicDir = path.join(__dirname, '..', 'public');
+  const docs = fs.readFileSync(path.join(publicDir, 'api-docs.html'), 'utf-8');
+
+  // 结构完整、可独立打开
+  assert.ok(docs.includes('<!DOCTYPE html>'), 'doc page must be a full HTML document');
+  assert.ok(docs.trim().endsWith('</html>'), 'doc page must close <html>');
+  assert.equal(
+    (docs.match(/<section/g) || []).length,
+    (docs.match(/<\/section>/g) || []).length,
+    'doc page <section> tags must be balanced'
+  );
+
+  // 两个客户接口都要写到
+  assert.ok(docs.includes('/v1/images/generations'), 'must document the create endpoint');
+  assert.ok(docs.includes('/v1/images/jobs/:id'), 'must document the poll endpoint');
+
+  // 关键错误码都要在表里
+  for (const code of [
+    'invalid_aspect_ratio',
+    'unauthorized',
+    'insufficient_credits',
+    'api_concurrency_limited',
+    'rate_limited',
+  ]) {
+    assert.ok(docs.includes(code), `error table must list ${code}`);
+  }
+
+  // 不得泄露内部/成本敏感信息给客户
+  assert.ok(!docs.includes('/api/admin/'), 'doc page must not expose admin endpoints');
+  assert.ok(!/replicate/i.test(docs), 'doc page must not name the upstream provider');
+  assert.ok(!docs.includes('credits_settle_failed'), 'doc page must not leak internal failure internals');
+
+  // index 页要能发现文档入口
+  const index = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf-8');
+  assert.ok(index.includes('href="/api-docs.html"'), 'index page must link to the API docs');
 });
