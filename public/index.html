@@ -391,6 +391,7 @@ textarea:focus { border-color: var(--gold-dim); box-shadow: 0 0 0 3px rgba(201,1
     linear-gradient(180deg, rgba(201,168,76,.045), rgba(255,255,255,.012)),
     rgba(255,255,255,.018);
 }
+.account-panel.is-hidden { display: none; }
 .account-head {
   display: flex;
   justify-content: space-between;
@@ -947,7 +948,7 @@ h2 {
   </section>
 
   <div class="card">
-    <div class="account-panel" aria-labelledby="accountTitle">
+    <div class="account-panel is-hidden" id="accountPanel" aria-labelledby="accountTitle">
       <div class="account-head">
         <div class="account-title" id="accountTitle">账户登录</div>
         <div class="account-caption">邮箱验证码登录后，可把兑换额度关联到账户。</div>
@@ -961,7 +962,7 @@ h2 {
         <button id="verifyCodeBtn" type="button" onclick="verifyEmailCode()">登录</button>
         <button id="logoutBtn" type="button" onclick="logoutEmailAuth()">登出</button>
       </div>
-      <p class="helper-note auth-status" id="authStatus">邮箱登录未启用或尚未登录。</p>
+      <p class="helper-note auth-status" id="authStatus">尚未登录。</p>
     </div>
     <label class="field-label" for="prompt">Describe your vision</label>
     <textarea id="prompt" placeholder="一只穿宇航服的柴犬在月球漫步，电影级光影，超写实风格…"></textarea>
@@ -998,6 +999,7 @@ h2 {
       <input id="redeemCode" type="text" placeholder="兑换码" />
       <button type="button" onclick="redeemCode()">兑换</button>
     </div>
+    <p class="helper-note">无需注册登录。兑换码会在本机保存一个钱包凭证，后续生成会自动扣减 credits。</p>
     <div class="helper-row">
       <input id="accessToken" type="password" placeholder="Access Token（若后端开启鉴权请填写）" />
     </div>
@@ -1302,12 +1304,17 @@ function updateAuthActionButtons() {
 
 function setEmailAuthAvailability(available) {
   emailAuthAvailable = Boolean(available);
+  const panel = document.getElementById('accountPanel');
+  if (panel) {
+    panel.classList.toggle('is-hidden', !emailAuthAvailable);
+  }
   ['emailInput', 'emailCodeInput'].forEach((id) => {
     const input = document.getElementById(id);
     if (input) input.disabled = !emailAuthAvailable;
   });
   if (!emailAuthAvailable) {
-    setAuthStatus('邮箱登录暂未开放，请先使用兑换码增加 credits。');
+    persistEmailAuthToken('');
+    return;
   }
   updateAuthActionButtons();
 }

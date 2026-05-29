@@ -279,14 +279,16 @@ test('index page setAuthStatus updates status text and visual state', () => {
   assert.equal(authStatus.className, 'helper-note auth-status');
 });
 
-test('index page places account login before creation prompt', () => {
+test('index page keeps account login hidden before creation prompt', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf-8');
-  const accountIndex = html.indexOf('class="account-panel"');
+  const accountIndex = html.indexOf('id="accountPanel"');
   const promptIndex = html.indexOf('for="prompt"');
 
   assert.notEqual(accountIndex, -1, 'expected account login panel');
   assert.notEqual(promptIndex, -1, 'expected prompt field label');
   assert.ok(accountIndex < promptIndex, 'account login should appear before the creation prompt');
+  assert.match(html, /class="account-panel is-hidden"/);
+  assert.match(html, /无需注册登录。兑换码会在本机保存一个钱包凭证/);
 });
 
 test('index page updateAuthActionButtons reflects loading and cooldown states', () => {
