@@ -9,7 +9,8 @@
     "dev": "node --watch server.js",
     "test": "node --test",
     "codes:create": "node scripts/create-redemption-codes.js",
-    "db:seed-export": "node scripts/export-migration-seed.js"
+    "db:seed-export": "node scripts/export-migration-seed.js",
+    "db:reconcile": "node scripts/db-reconcile.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

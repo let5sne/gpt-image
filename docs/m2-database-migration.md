@@ -17,14 +17,23 @@
 - 继续以文件存储为主。
 - 先通过导出脚本拿到统一 seed 数据：db/seed/bootstrap.json。
 
-### Phase 2（双写）
+### Phase 2（双写）— 已实现 + 已验证
 
-- 为关键写操作增加双写（文件 + DB）：
-  - redeem
-  - reserve/settle/release
-  - admin grant
-  - batch create/revoke
-- 以 feature flag 控制：DB_DUAL_WRITE=true。
+实现方式为**快照式双写**(非逐操作增量):每次 `writeCreditsState` 落盘后,
+经 `creditsDualWriteQueue` 串行触发一次 `dualWriteCreditsSnapshot` —— 在单个
+事务里清空 5 张 credits 表并按当前文件状态全量重插。admin 审计为追加写
+(`dualWriteAdminAudit`)。覆盖的写操作因此自动包含:redeem、reserve/settle/
+release、admin grant、batch create/revoke(它们都最终走 `writeCreditsState`)。
+
+- 以 feature flag 控制:`DB_DUAL_WRITE=true` + `DATABASE_URL`(见 `.env.example`)。
+- `pg` 为可选依赖;缺失或 DB 不可达时只记日志,**不阻塞文件主写**(已有测试覆盖)。
+- **UUID 守卫**:ledger 的 `job_id` 可能是非 UUID 的 Replicate prediction id,
+  经 `asUuidOrNull` 降级为 `null`,避免单条坏值导致整个快照事务回滚。
+- **对账闸门**:`npm run db:reconcile` 比对文件 vs DB 的账户余额汇总、ledger
+  行数、批次数、已兑换/已撤销数;全项一致(exit 0)才可进入 Phase 3。
+
+启用顺序:先在 staging 起 Postgres → `psql -f db/schema.sql` → 开双写 →
+跑 `db:reconcile` 全绿 → 再在生产开 `DB_DUAL_WRITE=true`(随时可关)。
 
 ### Phase 3（读切换）
 
