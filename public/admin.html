@@ -524,6 +524,134 @@ h1 {
 
 .key-revoked .mono { text-decoration: line-through; opacity: .6; }
 
+/* ── 用量可视化 ───────────────────────────────────── */
+.usage-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 4px 0 14px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.usage-stat {
+  padding: 11px 13px;
+  background: var(--panel-2);
+}
+
+.usage-stat b {
+  display: block;
+  font-size: 1.18rem;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  color: var(--ink);
+}
+
+.usage-stat.is-spend b { color: var(--accent-2); }
+
+.usage-stat span {
+  display: block;
+  margin-top: 4px;
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+}
+
+.usage-panel {
+  display: none;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(53,107,92,.04), rgba(53,107,92,0));
+}
+
+.usage-panel.is-open { display: block; }
+
+.usage-panel .usage-spark-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.usage-panel .usage-spark-head h4 {
+  margin: 0;
+  font-size: .72rem;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.usage-panel .usage-spark-head em {
+  font-style: normal;
+  font-size: .74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-spark {
+  display: block;
+  width: 100%;
+  height: 52px;
+}
+
+.usage-spark path.area { fill: rgba(53,107,92,.12); stroke: none; }
+.usage-spark path.line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.usage-spark circle { fill: var(--accent-2); }
+
+.usage-ledger {
+  width: 100%;
+  margin-top: 14px;
+  border-collapse: collapse;
+  font-size: .8rem;
+}
+
+.usage-ledger th {
+  text-align: left;
+  font-size: .66rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-ledger td {
+  padding: 6px 8px;
+  border-bottom: 1px dashed var(--line);
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+
+.usage-ledger td.num { text-align: right; }
+.usage-ledger tr:last-child td { border-bottom: 0; }
+.usage-ledger .when { color: var(--muted); font-size: .74rem; white-space: nowrap; }
+
+.led-type {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 650;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.led-type.t-settle { color: var(--accent-2); border-color: rgba(183,93,56,.35); background: rgba(183,93,56,.06); }
+.led-type.t-grant, .led-type.t-redeem { color: var(--ok); border-color: rgba(45,118,85,.32); background: rgba(45,118,85,.06); }
+
+.usage-ledger .delta-pos { color: var(--ok); }
+.usage-ledger .delta-neg { color: var(--accent-2); }
+
+.usage-panel .usage-empty { color: var(--muted); font-size: .82rem; padding: 6px 2px; }
+
 .inline-form {
   display: none;
   gap: 10px;
@@ -645,6 +773,8 @@ h1 {
 
   .customer-card-head { flex-direction: column; }
   .customer-wallet { text-align: left; }
+  .usage-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .usage-ledger { display: block; overflow-x: auto; white-space: nowrap; }
 }
 </style>
 </head>
@@ -1419,6 +1549,91 @@ function renderKeyRow(key) {
   `;
 }
 
+const LEDGER_TYPE_LABEL = {
+  settle: '消耗',
+  reserve: '冻结',
+  release: '解冻',
+  admin_grant: '充值',
+  redeem: '兑换',
+};
+
+function ledgerTypeClass(type) {
+  if (type === 'settle') return 'led-type t-settle';
+  if (type === 'admin_grant' || type === 'redeem') return 'led-type t-grant';
+  return 'led-type';
+}
+
+function formatUsageWhen(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// 列表卡片即时渲染的轻量统计条(来自 usage_summary,无需额外请求)。
+function renderUsageStats(summary, wallet) {
+  const s = summary || { total_spent: 0, generation_count: 0, spent_7d: 0 };
+  return `
+    <div class="usage-stats">
+      <div class="usage-stat is-spend"><b>${formatNumber(s.total_spent)}</b><span>累计消耗</span></div>
+      <div class="usage-stat"><b>${formatNumber(s.generation_count)}</b><span>生成张数</span></div>
+      <div class="usage-stat is-spend"><b>${formatNumber(s.spent_7d)}</b><span>近 7 日消耗</span></div>
+      <div class="usage-stat"><b>${formatNumber(wallet.available_credits)}</b><span>当前可用</span></div>
+    </div>
+  `;
+}
+
+// 纯函数:把 daily_30d 映射成内联 SVG sparkline(归一化 viewBox,无依赖、无逐帧动画)。
+function buildSparkline(daily) {
+  const days = Array.isArray(daily) ? daily : [];
+  const W = 300;
+  const H = 52;
+  const PAD = 3;
+  const max = days.reduce((m, d) => Math.max(m, Number(d.spent) || 0), 0);
+  const total = days.reduce((sum, d) => sum + (Number(d.spent) || 0), 0);
+  const n = days.length;
+  if (!n || max <= 0) {
+    return `<svg class="usage-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="近 30 日消耗趋势:暂无消耗"><line x1="0" y1="${H - PAD}" x2="${W}" y2="${H - PAD}" stroke="var(--line)" stroke-width="1"/></svg>`;
+  }
+  const stepX = n > 1 ? (W - PAD * 2) / (n - 1) : 0;
+  const scaleY = (H - PAD * 2) / max;
+  const pts = days.map((d, i) => {
+    const x = PAD + i * stepX;
+    const y = H - PAD - (Number(d.spent) || 0) * scaleY;
+    return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+  });
+  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0]} ${p[1]}`).join(' ');
+  const area = `M${pts[0][0]} ${H - PAD} ` + pts.map((p) => `L${p[0]} ${p[1]}`).join(' ') + ` L${pts[n - 1][0]} ${H - PAD} Z`;
+  const last = pts[n - 1];
+  const label = `近 30 日消耗趋势,合计 ${formatNumber(total)} credits,单日峰值 ${formatNumber(max)}`;
+  return `<svg class="usage-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(label)}">`
+    + `<path class="area" d="${area}"/><path class="line" d="${line}"/>`
+    + `<circle cx="${last[0]}" cy="${last[1]}" r="2.4"/></svg>`;
+}
+
+function renderUsageLedger(recent) {
+  const rows = Array.isArray(recent) ? recent : [];
+  if (!rows.length) {
+    return '<div class="usage-empty">暂无流水记录。</div>';
+  }
+  const body = rows.map((e) => {
+    const delta = Number(e.credits_delta) || 0;
+    const deltaClass = delta >= 0 ? 'delta-pos' : 'delta-neg';
+    const deltaText = `${delta >= 0 ? '+' : ''}${formatNumber(delta)}`;
+    const label = LEDGER_TYPE_LABEL[e.type] || e.type || '-';
+    return `<tr>
+      <td class="when">${escapeHtml(formatUsageWhen(e.created_at))}</td>
+      <td><span class="${ledgerTypeClass(e.type)}">${escapeHtml(label)}</span></td>
+      <td class="num ${deltaClass}">${deltaText}</td>
+      <td class="num">${formatNumber(e.available_after)}</td>
+    </tr>`;
+  }).join('');
+  return `<table class="usage-ledger">
+    <thead><tr><th>时间</th><th>类型</th><th class="num">变动</th><th class="num">余额</th></tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
+}
+
 function renderCustomerCard(customer) {
   const keys = Array.isArray(customer.api_keys) ? customer.api_keys : [];
   const activeKeys = keys.filter((k) => String(k.status) === 'active').length;
@@ -1444,10 +1659,14 @@ function renderCustomerCard(customer) {
         </div>
       </div>
       <div class="customer-body">
+        ${renderUsageStats(customer.usage_summary, wallet)}
         <div class="key-head">
           <h3>API 密钥（${activeKeys} 个有效 / 共 ${keys.length}）</h3>
         </div>
         ${keyRows}
+        <div class="usage-panel" data-usage="${cid}" data-loaded="0">
+          <div class="usage-empty">展开后加载用量明细…</div>
+        </div>
         <form class="inline-form" data-form="issue" data-customer="${cid}">
           <div class="split">
             <label>密钥备注<input name="note" maxlength="200" placeholder="可选，用途" /></label>
@@ -1463,6 +1682,7 @@ function renderCustomerCard(customer) {
           <button type="submit" class="primary btn-sm">确认充值</button>
         </form>
         <div class="card-actions">
+          <button class="btn-sm" type="button" data-usage-toggle="${cid}" aria-expanded="false">用量明细</button>
           <button class="btn-sm" type="button" data-toggle="issue" data-customer="${cid}">签发密钥</button>
           <button class="btn-sm" type="button" data-toggle="grant" data-customer="${cid}">充值 credits</button>
         </div>
@@ -1636,9 +1856,40 @@ async function revokeKey(keyId, trigger) {
   }
 }
 
+async function toggleUsagePanel(cid, trigger) {
+  const panel = customersWrap.querySelector(`.usage-panel[data-usage="${CSS.escape(cid)}"]`);
+  if (!panel) return;
+  const willOpen = !panel.classList.contains('is-open');
+  panel.classList.toggle('is-open', willOpen);
+  trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  if (!willOpen || panel.getAttribute('data-loaded') === '1') return;
+
+  panel.innerHTML = '<div class="usage-empty">加载中…</div>';
+  try {
+    const data = await api(`/api/admin/api-customers/${encodeURIComponent(cid)}/usage`);
+    panel.innerHTML = `
+      <div class="usage-spark-head">
+        <h4>近 30 日消耗</h4>
+        <em>累计 ${formatNumber(data.total_spent)} · 充值 ${formatNumber(data.total_granted)}</em>
+      </div>
+      ${buildSparkline(data.daily_30d)}
+      ${renderUsageLedger(data.recent)}
+    `;
+    panel.setAttribute('data-loaded', '1');
+  } catch (err) {
+    panel.innerHTML = `<div class="usage-empty">加载失败:${escapeHtml(err.message)}</div>`;
+  }
+}
+
 customersWrap.addEventListener('click', (event) => {
   const target = event.target;
   if (!target || typeof target.closest !== 'function') return;
+
+  const usageToggle = target.closest('button[data-usage-toggle]');
+  if (usageToggle) {
+    toggleUsagePanel(usageToggle.getAttribute('data-usage-toggle'), usageToggle);
+    return;
+  }
 
   const toggle = target.closest('button[data-toggle]');
   if (toggle) {
