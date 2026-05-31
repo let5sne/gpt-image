@@ -505,7 +505,7 @@ test('POST /api/redeem creates user wallet and prevents duplicate redemption', a
   assert.equal(duplicate.body.error.code, 'code_already_redeemed');
 });
 
-test('POST /api/generate settles credits when generation succeeds', async () => {
+test('POST /api/generate ignores client quality and always charges auto (anti-arbitrage)', async () => {
   setBaseEnv();
   const creditsFile = path.join(createTempDir(), 'credits.json');
   enableCredits(creditsFile);
@@ -525,6 +525,8 @@ test('POST /api/generate settles credits when generation succeeds', async () => 
       .send({ code: 'TEST-CODE-100' });
     const userToken = redeemed.body.data.user_token;
 
+    // 客户端谎报 quality=low(env 里 low=3),服务端必须无视并按 auto=20 扣费,
+    // 否则就能用 3 credits 拿到 auto 画质图(每张倒亏)。这是套利回归守卫。
     const generated = await request(app)
       .post('/api/generate')
       .set('x-user-token', userToken)
@@ -532,13 +534,13 @@ test('POST /api/generate settles credits when generation succeeds', async () => 
 
     assert.equal(generated.status, 200);
     assert.equal(generated.body.success, true);
-    assert.equal(generated.body.data.charged_credits, 3);
+    assert.equal(generated.body.data.charged_credits, 20);
 
     const wallet = await request(app)
       .get('/api/wallet')
       .set('x-user-token', userToken);
 
-    assert.equal(wallet.body.data.available_credits, 97);
+    assert.equal(wallet.body.data.available_credits, 80);
     assert.equal(wallet.body.data.reserved_credits, 0);
     assert.ok(wallet.body.data.recent_ledger.some((item) => item.type === 'settle'));
   } finally {
@@ -1844,4 +1846,188 @@ test('api-key creation rejects invalid and past expires_at', async () => {
     .send({ expires_at: '2000-01-01T00:00:00Z' });
   assert.equal(past.status, 400);
   assert.equal(past.body.error.code, 'invalid_expires_at');
+});
+
+// ── API 客户用量聚合 summarizeCustomerUsage ──────────────────
+function makeLedgerEntry(userId, type, delta, availableAfter, createdAt, extra = {}) {
+  return {
+    id: crypto.randomUUID(),
+    user_id: userId,
+    type,
+    credits_delta: delta,
+    available_after: availableAfter,
+    reserved_after: 0,
+    job_id: extra.jobId || null,
+    redemption_code_id: extra.redemptionCodeId || null,
+    note: extra.note || null,
+    created_at: createdAt,
+  };
+}
+
+test('summarizeCustomerUsage aggregates spend, grants, and counts by type', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const now = Date.parse('2026-05-29T12:00:00Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  const uid = 'user-1';
+  const state = {
+    credit_ledger: [
+      makeLedgerEntry(uid, 'admin_grant', 100, 100, new Date(now - 20 * DAY).toISOString()),
+      makeLedgerEntry(uid, 'redeem', 50, 150, new Date(now - 10 * DAY).toISOString()),
+      makeLedgerEntry(uid, 'reserve', -20, 130, new Date(now - 2 * DAY).toISOString()),
+      makeLedgerEntry(uid, 'settle', -20, 130, new Date(now - 2 * DAY).toISOString(), { jobId: 'j1' }),
+      makeLedgerEntry(uid, 'reserve', -20, 110, new Date(now - 1 * DAY).toISOString()),
+      makeLedgerEntry(uid, 'release', 20, 130, new Date(now - 1 * DAY).toISOString()),
+      makeLedgerEntry(uid, 'settle', -20, 110, new Date(now).toISOString(), { jobId: 'j2' }),
+      // 另一个用户的流水,必须被过滤掉
+      makeLedgerEntry('user-2', 'settle', -999, 0, new Date(now).toISOString()),
+    ],
+  };
+
+  const usage = app.summarizeCustomerUsage(state, uid, { now });
+
+  assert.equal(usage.total_spent, 40, 'settle 绝对值之和 = 20+20');
+  assert.equal(usage.total_granted, 150, 'admin_grant + redeem = 100+50');
+  assert.equal(usage.generation_count, 2, 'settle 条数');
+  assert.equal(usage.spent_7d, 40, '两笔 settle 都在 7 日内');
+  assert.equal(usage.spent_30d, 40);
+});
+
+test('summarizeCustomerUsage daily_30d has fixed length, zero-fills, and respects 7d boundary', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const now = Date.parse('2026-05-29T12:00:00Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  const uid = 'user-1';
+  const state = {
+    credit_ledger: [
+      makeLedgerEntry(uid, 'settle', -5, 0, new Date(now).toISOString()),            // 今天
+      makeLedgerEntry(uid, 'settle', -7, 0, new Date(now - 8 * DAY).toISOString()),  // 8天前:超出7日窗口
+      makeLedgerEntry(uid, 'settle', -3, 0, new Date(now - 40 * DAY).toISOString()), // 40天前:超出30日窗口
+    ],
+  };
+
+  const usage = app.summarizeCustomerUsage(state, uid, { now });
+
+  assert.equal(usage.daily_30d.length, 30, '固定 30 个桶');
+  assert.equal(usage.daily_30d[29].spent, 5, '末桶=今天=5');
+  assert.equal(usage.daily_30d[21].spent, 7, '8天前的桶=7');
+  assert.equal(usage.daily_30d.reduce((s, d) => s + d.spent, 0), 12, '仅窗口内两笔进入 daily(5+7),40天前不计');
+  assert.equal(usage.spent_7d, 5, '7日内仅今天那笔');
+  assert.equal(usage.spent_30d, 12, '30日内两笔');
+  assert.equal(usage.total_spent, 15, 'total 包含全部 settle(含40天前)');
+  // 日期键应为升序、唯一、格式 YYYY-MM-DD
+  const dates = usage.daily_30d.map((d) => d.date);
+  assert.equal(new Set(dates).size, 30);
+  assert.ok(dates.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)));
+  assert.deepEqual(dates, [...dates].sort());
+});
+
+test('summarizeCustomerUsage recent is newest-first, trimmed, and field-redacted', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const now = Date.parse('2026-05-29T12:00:00Z');
+  const uid = 'user-1';
+  const ledger = [];
+  for (let i = 0; i < 20; i += 1) {
+    ledger.push(makeLedgerEntry(uid, 'settle', -1, 100 - i, new Date(now - (20 - i) * 1000).toISOString(), { jobId: `j${i}` }));
+  }
+  const usage = app.summarizeCustomerUsage({ credit_ledger: ledger }, uid, { now, recentLimit: 15 });
+
+  assert.equal(usage.recent.length, 15, '裁剪到 15 条');
+  assert.equal(usage.recent[0].job_id, 'j19', '最新在前');
+  assert.equal(usage.recent[14].job_id, 'j5');
+  // 字段裁剪:不应泄露内部 id / user_id / redemption_code_id
+  const keys = Object.keys(usage.recent[0]).sort();
+  assert.deepEqual(keys, ['available_after', 'created_at', 'credits_delta', 'job_id', 'note', 'reserved_after', 'type']);
+});
+
+test('summarizeCustomerUsage returns zero usage for user with no ledger', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const usage = app.summarizeCustomerUsage({ credit_ledger: [] }, 'nobody', { now: Date.parse('2026-05-29T12:00:00Z') });
+  assert.equal(usage.total_spent, 0);
+  assert.equal(usage.generation_count, 0);
+  assert.equal(usage.daily_30d.length, 30);
+  assert.deepEqual(usage.recent, []);
+});
+
+test('GET /api/admin/api-customers/:id/usage requires admin token', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { customerId } = await provisionCustomer(app, { credits: 50 });
+  const unauth = await request(app).get(`/api/admin/api-customers/${customerId}/usage`);
+  assert.equal(unauth.status, 401);
+});
+
+test('GET /api/admin/api-customers/:id/usage returns 404 for unknown customer', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const res = await request(app)
+    .get('/api/admin/api-customers/does-not-exist/usage')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error.code, 'customer_not_found');
+});
+
+test('GET /api/admin/api-customers/:id/usage returns 404 when credits disabled', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  // CREDITS_ENABLED 保持 false(setBaseEnv 默认)
+  const app = loadFreshApp();
+  const res = await request(app)
+    .get('/api/admin/api-customers/any/usage')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error.code, 'credits_disabled');
+});
+
+test('usage endpoint and list summary reflect a real settle after v1 generation', async () => {
+  setupV1Env();
+  const app = loadFreshApp();
+  const { customerId, apiKey } = await provisionCustomer(app, { credits: 100 });
+
+  const calls = [];
+  const originalFetch = global.fetch;
+  global.fetch = makeReplicateMock(calls, { predictionId: 'pred-usage', finalStatus: 'succeeded' });
+  try {
+    const created = await request(app)
+      .post('/v1/images/generations')
+      .set('Authorization', `Bearer ${apiKey}`)
+      .send({ prompt: 'a calico cat', aspect_ratio: '1:1' });
+    assert.equal(created.status, 202);
+    const jobId = created.body.data.id;
+    await waitFor(async () => {
+      const res = await request(app)
+        .get(`/v1/images/jobs/${jobId}`)
+        .set('Authorization', `Bearer ${apiKey}`);
+      return res.body.data && res.body.data.status === 'succeeded' ? res : null;
+    });
+
+    // 详情接口:消耗已结算
+    const usage = await request(app)
+      .get(`/api/admin/api-customers/${customerId}/usage`)
+      .set('x-admin-token', 'admin-secret');
+    assert.equal(usage.status, 200);
+    assert.equal(usage.body.data.total_spent, 20);
+    assert.equal(usage.body.data.generation_count, 1);
+    assert.equal(usage.body.data.spent_7d, 20);
+    assert.equal(usage.body.data.daily_30d.length, 30);
+    assert.equal(usage.body.data.daily_30d[29].spent, 20, '今天的桶=本次消耗');
+    assert.equal(usage.body.data.total_granted, 100);
+    // settle 记录的 job_id 是信用预留 id(reservation.id),非 v1 job id —— 只断言存在 settle 流水。
+    assert.ok(usage.body.data.recent.some((e) => e.type === 'settle'), 'recent 应含一条 settle 流水');
+
+    // 列表轻量汇总:同步反映
+    const list = await request(app)
+      .get('/api/admin/api-customers')
+      .set('x-admin-token', 'admin-secret');
+    const customer = list.body.data.customers.find((c) => c.id === customerId);
+    assert.equal(customer.usage_summary.total_spent, 20);
+    assert.equal(customer.usage_summary.generation_count, 1);
+    assert.equal(customer.usage_summary.spent_7d, 20);
+    assert.equal(customer.wallet.available_credits, 80);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

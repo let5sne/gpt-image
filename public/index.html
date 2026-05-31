@@ -985,13 +985,6 @@ h2 {
           <option value="1536x1024">横版 · 3:2</option>
         </select>
       </div>
-      <div class="size-wrap">
-        <select id="quality" onchange="updateEstimatedCost()">
-          <option value="low">Low · 20 credits</option>
-          <option value="medium">Medium · 20 credits</option>
-          <option value="auto" selected>Auto · 20 credits</option>
-        </select>
-      </div>
       <button id="btn" onclick="generate()">Generate</button>
     </div>
     <div class="wallet-row" id="walletRow">
@@ -1111,9 +1104,10 @@ function setAuthStatus(message, state = '') {
   el.className = `helper-note auth-status${state ? ` is-${state}` : ''}`;
 }
 
+// 统一画质:固定 auto,每张固定 20 credits(不再提供画质选择)。
+const CREDITS_PER_IMAGE = 20;
 function getQualityCost() {
-  const quality = document.getElementById('quality')?.value || 'auto';
-  return { low: 20, medium: 20, auto: 20, high: 20 }[quality] || 20;
+  return CREDITS_PER_IMAGE;
 }
 
 function updateEstimatedCost() {
@@ -1879,8 +1873,7 @@ async function generate() {
   const token = getAccessToken();
   persistAccessToken(token);
   const size = document.getElementById('size').value;
-  const quality = document.getElementById('quality').value;
-  const submissionKey = buildSubmissionKey(prompt, size, quality);
+  const submissionKey = buildSubmissionKey(prompt, size, 'auto');
 
   if (activeSubmissionKeys.has(submissionKey)) {
     result.innerHTML = '<p class="error-msg">相同任务已经在队列里了，请不要重复提交。</p>';
@@ -1902,7 +1895,6 @@ async function generate() {
       body: JSON.stringify({
         prompt,
         size,
-        quality,
       })
     });
 

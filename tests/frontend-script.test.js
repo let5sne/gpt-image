@@ -403,3 +403,84 @@ test('api-docs page documents v1 endpoints, error codes, and links from index', 
   const index = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf-8');
   assert.ok(index.includes('href="/api-docs.html"'), 'index page must link to the API docs');
 });
+
+test('admin page buildSparkline produces normalized SVG paths and handles empty data', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const escapeHtmlMatch = html.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  const formatNumberSource = extractFunctionSource(html, 'formatNumber');
+  const buildSparklineSource = extractFunctionSource(html, 'buildSparkline');
+
+  const context = vm.createContext({});
+  vm.runInContext(`
+    ${escapeHtmlMatch[0]}
+    ${formatNumberSource}
+    ${buildSparklineSource}
+    globalThis.buildSparkline = buildSparkline;
+  `, context);
+
+  // 全零数据:退化为基线,无 area/line path,但有可访问标签
+  const empty = context.buildSparkline([{ date: '2026-05-01', spent: 0 }, { date: '2026-05-02', spent: 0 }]);
+  assert.ok(empty.includes('role="img"'));
+  assert.ok(empty.includes('暂无消耗'));
+  assert.equal(empty.includes('class="line"'), false);
+
+  // 有数据:含 area + line + 末点圆,aria-label 含合计与峰值
+  const days = [];
+  for (let i = 0; i < 30; i += 1) days.push({ date: `2026-05-${String(i + 1).padStart(2, '0')}`, spent: i });
+  const svg = context.buildSparkline(days);
+  assert.ok(svg.includes('<path class="area"'));
+  assert.ok(svg.includes('<path class="line"'));
+  assert.ok(svg.includes('<circle'));
+  assert.ok(svg.includes('role="img"'));
+  assert.ok(/aria-label="[^"]*合计[^"]*峰值/.test(svg), 'aria-label 应含合计与峰值');
+  // 所有坐标应落在 viewBox 内(W=300,H=52)
+  const coords = [...svg.matchAll(/[ML]([\d.]+) ([\d.]+)/g)];
+  assert.ok(coords.length > 0);
+  for (const [, x, y] of coords) {
+    assert.ok(Number(x) >= 0 && Number(x) <= 300, `x ${x} 越界`);
+    assert.ok(Number(y) >= 0 && Number(y) <= 52, `y ${y} 越界`);
+  }
+});
+
+test('admin page renderUsageLedger escapes, labels types, and signs deltas', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin.html'), 'utf-8');
+  const escapeHtmlMatch = html.match(/function escapeHtml\(value\) \{[\s\S]*?\n\}/);
+  const formatNumberSource = extractFunctionSource(html, 'formatNumber');
+  const formatWhenSource = extractFunctionSource(html, 'formatUsageWhen');
+  const typeClassSource = extractFunctionSource(html, 'ledgerTypeClass');
+  const renderLedgerSource = extractFunctionSource(html, 'renderUsageLedger');
+  const labelMatch = html.match(/const LEDGER_TYPE_LABEL = \{[\s\S]*?\};/);
+  assert.ok(labelMatch, 'expected LEDGER_TYPE_LABEL map');
+
+  const context = vm.createContext({});
+  vm.runInContext(`
+    ${escapeHtmlMatch[0]}
+    ${formatNumberSource}
+    ${formatWhenSource}
+    ${labelMatch[0]}
+    ${typeClassSource}
+    ${renderLedgerSource}
+    globalThis.renderUsageLedger = renderUsageLedger;
+  `, context);
+
+  assert.ok(context.renderUsageLedger([]).includes('暂无流水记录'));
+
+  const out = context.renderUsageLedger([
+    { type: 'settle', credits_delta: -20, available_after: 80, created_at: '2026-05-29T10:00:00Z' },
+    { type: 'admin_grant', credits_delta: 100, available_after: 100, created_at: '2026-05-28T10:00:00Z' },
+  ]);
+  assert.ok(out.includes('消耗'), 'settle 显示中文标签');
+  assert.ok(out.includes('充值'), 'admin_grant 显示中文标签');
+  assert.ok(out.includes('t-settle'));
+  assert.ok(out.includes('t-grant'));
+  assert.ok(out.includes('delta-neg'));
+  assert.ok(out.includes('delta-pos'));
+  assert.ok(out.includes('+100'), '正变动带 + 号');
+
+  // 未知类型回退到原值并被转义
+  const xss = context.renderUsageLedger([
+    { type: '<img src=x>', credits_delta: -1, available_after: 0, created_at: '2026-05-29T10:00:00Z' },
+  ]);
+  assert.ok(xss.includes('&lt;img'));
+  assert.equal(xss.includes('<img src=x>'), false);
+});

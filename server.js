@@ -1252,9 +1252,78 @@ function createApiSecret() {
   return `gim_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
+// 按客户(user)聚合 credit_ledger,产出用量统计。纯只读,不改账本。
+// settle 是真实扣费(负 delta),reserve/release 只是冻结/解冻,不计入消耗。
+function summarizeCustomerUsage(state, userId, { now = Date.now(), days = 30, recentLimit = 15 } = {}) {
+  const entries = (state.credit_ledger || []).filter((entry) => entry.user_id === userId);
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const window7 = now - 7 * DAY_MS;
+  const window30 = now - 30 * DAY_MS;
+
+  let totalSpent = 0;
+  let totalGranted = 0;
+  let generationCount = 0;
+  let spent7d = 0;
+  let spent30d = 0;
+
+  // daily_30d:按本地日期补零,索引 0 = (days-1) 天前,末位 = 今天。
+  const dayKeys = [];
+  const dayIndex = new Map();
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(now - i * DAY_MS);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    dayIndex.set(key, dayKeys.length);
+    dayKeys.push({ date: key, spent: 0 });
+  }
+
+  for (const entry of entries) {
+    const ts = Date.parse(entry.created_at);
+    const delta = Number(entry.credits_delta) || 0;
+    if (entry.type === 'settle') {
+      const spent = Math.abs(delta);
+      totalSpent += spent;
+      generationCount += 1;
+      if (!Number.isNaN(ts)) {
+        if (ts >= window7) spent7d += spent;
+        if (ts >= window30) spent30d += spent;
+        const d = new Date(ts);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (dayIndex.has(key)) dayKeys[dayIndex.get(key)].spent += spent;
+      }
+    } else if (entry.type === 'admin_grant' || entry.type === 'redeem') {
+      totalGranted += delta;
+    }
+  }
+
+  const recent = entries
+    .slice(-recentLimit)
+    .reverse()
+    .map((entry) => ({
+      type: entry.type,
+      credits_delta: entry.credits_delta,
+      available_after: entry.available_after,
+      reserved_after: entry.reserved_after,
+      job_id: entry.job_id || null,
+      note: entry.note || null,
+      created_at: entry.created_at,
+    }));
+
+  return {
+    total_spent: totalSpent,
+    total_granted: totalGranted,
+    generation_count: generationCount,
+    spent_7d: spent7d,
+    spent_30d: spent30d,
+    daily_30d: dayKeys,
+    recent,
+  };
+}
+
 function serializeApiCustomer(state, customer) {
   const account = customer ? getAccount(state, customer.user_id) : null;
   const keys = (state.api_keys || []).filter((item) => item.customer_id === customer.id);
+  const usage = summarizeCustomerUsage(state, customer.user_id);
   return {
     id: customer.id,
     name: customer.name,
@@ -1265,6 +1334,11 @@ function serializeApiCustomer(state, customer) {
     wallet: {
       available_credits: account ? account.available_credits : 0,
       reserved_credits: account ? account.reserved_credits : 0,
+    },
+    usage_summary: {
+      total_spent: usage.total_spent,
+      generation_count: usage.generation_count,
+      spent_7d: usage.spent_7d,
     },
     api_keys: keys.map((item) => ({
       id: item.id,
@@ -2719,6 +2793,22 @@ app.get('/api/admin/api-customers', requireAdminAuth, (req, res) => {
   return sendOk(res, req, { customers });
 });
 
+app.get('/api/admin/api-customers/:id/usage', requireAdminAuth, (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  const state = creditsRepository.readState();
+  const customer = (state.api_customers || []).find((item) => item.id === req.params.id);
+  if (!customer) {
+    return sendError(res, req, 404, 'customer_not_found', 'api customer not found');
+  }
+  const usage = summarizeCustomerUsage(state, customer.user_id);
+  return sendOk(res, req, {
+    customer_id: customer.id,
+    ...usage,
+  });
+});
+
 app.post('/api/admin/api-customers/:id/api-keys', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
@@ -2918,7 +3008,10 @@ app.get('/api/jobs/:id', requireAuth, (req, res) => {
 // ── 核心：生图接口 ──────────────────────────────────────
 app.post('/api/generate', generateRateLimiter, requireAuth, async (req, res) => {
   const start = Date.now();
-  const { prompt, size = '1024x1024', n = 1, quality = 'auto' } = req.body || {};
+  const { prompt, size = '1024x1024', n = 1 } = req.body || {};
+  // 统一画质与计费:网页端固定按 auto 出图并扣 20 credits,忽略请求体里的 quality,
+  // 从源头消除“选低档→低扣费、但实际仍生成 auto 画质”的套利(与 /v1 接口一致)。
+  const quality = 'auto';
 
   if (typeof prompt !== 'string') {
     return sendError(res, req, 400, 'invalid_prompt', 'prompt must be a string');
@@ -3263,5 +3356,8 @@ restoreStoredJobs();
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Image Studio running -> http://localhost:${PORT}`));
 }
+
+// 只读纯函数,挂在 app 上供测试做日期分桶/边界断言;不改变默认导出形状。
+app.summarizeCustomerUsage = summarizeCustomerUsage;
 
 module.exports = app;
