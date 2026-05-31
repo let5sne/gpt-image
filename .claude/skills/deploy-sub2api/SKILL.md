@@ -113,6 +113,15 @@ if [ "$BUILD_RC" = "0" ]; then
 fi
 if [ "$ok" = 1 ]; then
   echo "=== ✓ DEPLOY OK: current -> $(readlink current) ==="
+  # 4) prune old releases (success-only): keep newest KEEP_N + current + rollback
+  KEEP_N=5; CUR=$(basename "$(readlink current)"); RB=$(basename "$OLD")
+  declare -A K; for r in $(ls -1 releases | sort -r | head -n "$KEEP_N"); do K[$r]=1; done
+  K[$CUR]=1; K[$RB]=1                                    # never delete current/rollback
+  for r in $(ls -1 releases); do
+    [ -n "${K[$r]}" ] && continue
+    rm -rf "releases/$r" && echo "  pruned release $r"
+  done
+  echo "  releases kept: $(ls -1 releases | wc -l)"      # backups/storage untouched
 else
   echo "=== ✗ FAILED → rollback to $OLD ==="           # 3) auto-rollback
   ln -sfn "$OLD" current
@@ -135,8 +144,10 @@ release dir.
 - Public entry: container binds `127.0.0.1:3001` only; verify the live domain in
   a browser (quality dropdown gone, generation charges 20). The reverse proxy is
   NOT nginx by `server_name` — confirm the real entry separately.
-- `releases/` is never auto-pruned. To trim disk, delete OLD release dirs only —
-  never `current`, `backups/`, or `storage/`.
+- `releases/` is auto-pruned at the end of a successful Phase B (keeps newest 5
+  plus `current` and the rollback target). Prune runs ONLY on deploy success,
+  never on failure/rollback, and never touches `current`, `backups/`, or
+  `storage/`. Adjust `KEEP_N` in Phase B to change retention.
 - Cleanup: `rm -f /tmp/gpt-image-release-*.tar` on both local and host.
 
 ## Known limitations / TODO
