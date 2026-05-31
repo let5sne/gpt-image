@@ -618,6 +618,15 @@ function toJson(value) {
   return JSON.stringify(value && typeof value === 'object' ? value : {});
 }
 
+// Postgres `uuid` columns reject non-UUID strings, which would abort the whole
+// dual-write snapshot transaction. ledger.job_id is usually a reservation UUID,
+// but a Replicate prediction id is not guaranteed to be UUID-shaped — guard it
+// so a single odd value degrades to NULL instead of dropping the entire snapshot.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function asUuidOrNull(value) {
+  return typeof value === 'string' && UUID_RE.test(value) ? value : null;
+}
+
 function getDbPool() {
   if (!DB_DUAL_WRITE || !DATABASE_URL) return null;
   if (dbPool) return dbPool;
@@ -702,8 +711,8 @@ async function dualWriteCreditsSnapshot(state, reason) {
           ledger.credits_delta || 0,
           ledger.available_after || 0,
           ledger.reserved_after || 0,
-          ledger.job_id || null,
-          ledger.redemption_code_id || null,
+          asUuidOrNull(ledger.job_id),
+          asUuidOrNull(ledger.redemption_code_id),
           ledger.note || null,
           toIsoOrNull(ledger.created_at) || nowIso(),
         ]
@@ -3359,5 +3368,7 @@ if (require.main === module) {
 
 // 只读纯函数,挂在 app 上供测试做日期分桶/边界断言;不改变默认导出形状。
 app.summarizeCustomerUsage = summarizeCustomerUsage;
+// dual-write 的 uuid 列守卫,挂出供单测验证非 UUID 值降级为 null。
+app.asUuidOrNull = asUuidOrNull;
 
 module.exports = app;

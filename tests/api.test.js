@@ -2031,3 +2031,45 @@ test('usage endpoint and list summary reflect a real settle after v1 generation'
     global.fetch = originalFetch;
   }
 });
+
+test('asUuidOrNull keeps valid UUIDs and degrades non-UUID values to null', () => {
+  setBaseEnv();
+  const app = loadFreshApp();
+  const guard = app.asUuidOrNull;
+  // 合法 UUID(reserve 类型 ledger 的 job_id 形态)原样保留
+  assert.equal(guard('3fbbc668-cfd2-4abc-99c0-b1fe05f890da'), '3fbbc668-cfd2-4abc-99c0-b1fe05f890da');
+  // Replicate prediction id 等非 UUID 字符串 → null,避免快照事务整体回滚
+  assert.equal(guard('zx9q7k2m'), null);
+  assert.equal(guard('pred_abc123'), null);
+  // 空值/非字符串 → null
+  assert.equal(guard(null), null);
+  assert.equal(guard(undefined), null);
+  assert.equal(guard(12345), null);
+});
+
+test('dual-write enabled but DB unreachable does not break the primary file path', async () => {
+  setBaseEnv();
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  // 开启双写,但指向一个立即 ECONNREFUSED 的本地端口:DB 写应被静默吞掉,主流程不受影响。
+  process.env.DB_DUAL_WRITE = 'true';
+  process.env.DATABASE_URL = 'postgresql://127.0.0.1:59999/nodb';
+  try {
+    const app = loadFreshApp();
+    const redeemed = await request(app).post('/api/redeem').send({ code: 'TEST-CODE-100' });
+    // 请求成功,与无双写时行为一致
+    assert.equal(redeemed.status, 200);
+    assert.equal(redeemed.body.success, true);
+    assert.equal(redeemed.body.data.available_credits, 100);
+    // 文件主写已落盘(DB 不可达不影响文件这一权威来源)
+    const persisted = JSON.parse(fs.readFileSync(creditsFile, 'utf-8'));
+    assert.equal(persisted.accounts.length, 1);
+    assert.equal(persisted.accounts[0].available_credits, 100);
+    // 给 fire-and-forget 的 DB 写队列一个 tick 去失败,确认不会冒泡成未捕获异常
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    delete process.env.DB_DUAL_WRITE;
+    delete process.env.DATABASE_URL;
+  }
+});
