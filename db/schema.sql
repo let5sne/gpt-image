@@ -3,7 +3,8 @@
 
 create table if not exists users (
   id uuid primary key,
-  user_token_hash text not null unique,
+  -- nullable: API-customer-backed users authenticate via API keys, not a token hash
+  user_token_hash text unique,
   status text not null default 'active',
   created_at timestamptz not null,
   updated_at timestamptz not null
