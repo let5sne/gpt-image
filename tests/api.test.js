@@ -1096,6 +1096,26 @@ test('admin db resync requires auth and refuses when dual-write is disabled', as
   assert.equal(disabled.body.error.code, 'db_dual_write_disabled');
 });
 
+test('admin db verify-roundtrip requires auth and refuses when dual-write is disabled', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  delete process.env.DB_DUAL_WRITE;
+  delete process.env.DATABASE_URL;
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  const unauthorized = await request(app).get('/api/admin/db/verify-roundtrip');
+  assert.equal(unauthorized.status, 401);
+
+  const disabled = await request(app)
+    .get('/api/admin/db/verify-roundtrip')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(disabled.status, 409);
+  assert.equal(disabled.body.error.code, 'db_dual_write_disabled');
+});
+
 test('redemption list endpoints fall back to file when DB read flag is on but DB unavailable', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';

@@ -2357,6 +2357,158 @@ async function loadRedemptionDbState() {
   }
 }
 
+// Phase 4 Stage C:反向读 —— 从 DB 重建完整 credits state(dualWriteCreditsSnapshot 的逆)。
+// 为权威翻转(Stage D)铺路:先用 verify-roundtrip 证明 DB→state 重建与文件态逐字段一致。
+// 数组按 created_at,id 稳定排序;时间戳走 dbValueToIso 保毫秒。
+// 关键:不读 ledger.reservation_id(文件态无此字段,它是 job_id 的 UUID 派生影子),
+// 只用 job_id text 列还原 job_id —— 这正是 migration 002 加该列以保无损往返的原因。
+// 失败/不可用返回 null → 调用方回退文件态。
+async function loadCreditsStateFromDb() {
+  const pool = getDbPool();
+  if (!pool) return null;
+  try {
+    const rows = async (sql) => (await pool.query(sql)).rows;
+    const userRows = await rows('select id, user_token_hash, api_customer_id, status, created_at, updated_at from users order by created_at, id');
+    const walletRows = await rows('select id, user_id, available_credits, reserved_credits, created_at, updated_at from wallets order by created_at, id');
+    const customerRows = await rows('select id, name, contact, status, note, user_id, created_at, updated_at from api_customers order by created_at, id');
+    const keyRows = await rows('select id, customer_id, key_hash, key_prefix, status, expires_at, note, last_used_at, revoked_at, created_at from api_keys order by created_at, id');
+    const batchRows = await rows('select id, name, credits_per_code, code_count, expires_at, created_at from redemption_batches order by created_at, id');
+    const codeRows = await rows('select id, batch_id, code_hash, code_hint, credits, status, redeemed_by_user_id, redeemed_at, revoked_at, revoked_note, expires_at, created_at from redemption_codes order by created_at, id');
+    const ledgerRows = await rows('select id, user_id, type, credits_delta, available_after, reserved_after, redemption_code_id, job_id, note, created_at from credit_ledger order by created_at, id');
+    return {
+      // __STATE_MAP_1__
+      users: userRows.map((u) => ({
+        id: u.id,
+        user_token_hash: u.user_token_hash || null,
+        api_customer_id: u.api_customer_id || null,
+        status: u.status,
+        created_at: dbValueToIso(u.created_at),
+        updated_at: dbValueToIso(u.updated_at),
+      })),
+      accounts: walletRows.map((w) => ({
+        id: w.id,
+        user_id: w.user_id,
+        available_credits: w.available_credits,
+        reserved_credits: w.reserved_credits,
+        created_at: dbValueToIso(w.created_at),
+        updated_at: dbValueToIso(w.updated_at),
+      })),
+      api_customers: customerRows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        contact: c.contact || '',
+        status: c.status,
+        note: c.note || '',
+        user_id: c.user_id,
+        created_at: dbValueToIso(c.created_at),
+        updated_at: dbValueToIso(c.updated_at),
+      })),
+      api_keys: keyRows.map((k) => ({
+        id: k.id,
+        customer_id: k.customer_id,
+        key_hash: k.key_hash,
+        key_prefix: k.key_prefix || null,
+        status: k.status,
+        expires_at: dbValueToIso(k.expires_at),
+        note: k.note || '',
+        last_used_at: dbValueToIso(k.last_used_at),
+        revoked_at: dbValueToIso(k.revoked_at),
+        created_at: dbValueToIso(k.created_at),
+      })),
+      // __STATE_MAP_2__
+      redemption_batches: batchRows.map((b) => ({
+        id: b.id,
+        name: b.name,
+        credits_per_code: b.credits_per_code,
+        code_count: b.code_count,
+        expires_at: dbValueToIso(b.expires_at),
+        created_at: dbValueToIso(b.created_at),
+      })),
+      redemption_codes: codeRows.map((c) => ({
+        id: c.id,
+        batch_id: c.batch_id,
+        code_hash: c.code_hash,
+        code_hint: c.code_hint || null,
+        credits: c.credits,
+        status: c.status,
+        redeemed_by_user_id: c.redeemed_by_user_id || null,
+        redeemed_at: dbValueToIso(c.redeemed_at),
+        revoked_at: dbValueToIso(c.revoked_at),
+        revoked_note: c.revoked_note || null,
+        expires_at: dbValueToIso(c.expires_at),
+        created_at: dbValueToIso(c.created_at),
+      })),
+      credit_ledger: ledgerRows.map((l) => ({
+        id: l.id,
+        user_id: l.user_id,
+        type: l.type,
+        credits_delta: l.credits_delta,
+        available_after: l.available_after,
+        reserved_after: l.reserved_after,
+        job_id: l.job_id || null,
+        redemption_code_id: l.redemption_code_id || null,
+        note: l.note || null,
+        created_at: dbValueToIso(l.created_at),
+      })),
+    };
+  } catch (err) {
+    log('error', 'db_read_credits_state_failed', { message: err.message });
+    return null;
+  }
+}
+
+// Phase 4 Stage C:逐字段比对文件态与「DB 反向重建态」,证明往返无损 —— 权威翻转前的硬闸门。
+// 只读;按 id 匹配(顺序无关);比较两侧键的并集,undefined 与 null 视为相等
+//(DB 重建把缺省字段还原为 null,文件态可能整个不写该字段)。
+// 只报告不一致的「集合/id/字段名」,绝不返回字段值 —— 避免泄漏 key_hash/code_hash。
+const ROUNDTRIP_COLLECTIONS = [
+  'users', 'accounts', 'api_customers', 'api_keys',
+  'redemption_batches', 'redemption_codes', 'credit_ledger',
+];
+function scalarEq(a, b) {
+  const na = a === undefined ? null : a;
+  const nb = b === undefined ? null : b;
+  return na === nb;
+}
+function diffCreditsStates(fileState, dbState) {
+  const SAMPLE = 5;
+  const collections = {};
+  let ok = true;
+  for (const name of ROUNDTRIP_COLLECTIONS) {
+    const fileArr = Array.isArray(fileState[name]) ? fileState[name] : [];
+    const dbArr = Array.isArray(dbState[name]) ? dbState[name] : [];
+    const dbById = new Map(dbArr.map((r) => [r.id, r]));
+    const fileIds = new Set(fileArr.map((r) => r.id));
+    const missingInDb = [];
+    const extraInDb = [];
+    const fieldMismatches = [];
+    for (const fileRow of fileArr) {
+      const dbRow = dbById.get(fileRow.id);
+      if (!dbRow) { missingInDb.push(fileRow.id); continue; }
+      const keys = new Set([...Object.keys(fileRow), ...Object.keys(dbRow)]);
+      for (const k of keys) {
+        if (!scalarEq(fileRow[k], dbRow[k]) && fieldMismatches.length < SAMPLE) {
+          fieldMismatches.push({ id: fileRow.id, field: k });
+        }
+      }
+    }
+    for (const dbRow of dbArr) {
+      if (!fileIds.has(dbRow.id)) extraInDb.push(dbRow.id);
+    }
+    const collOk = missingInDb.length === 0 && extraInDb.length === 0 && fieldMismatches.length === 0;
+    if (!collOk) ok = false;
+    collections[name] = {
+      ok: collOk,
+      file_count: fileArr.length,
+      db_count: dbArr.length,
+      missing_in_db: missingInDb.slice(0, SAMPLE),
+      extra_in_db: extraInDb.slice(0, SAMPLE),
+      field_mismatches: fieldMismatches,
+    };
+  }
+  return { ok, collections };
+}
+
 // source 语义与 overview 对齐:flag 关→file;flag 开且读到→db;flag 开但不可用/出错→file-fallback。
 function redemptionListSource(dbState) {
   if (dbState) return 'db';
@@ -2669,6 +2821,25 @@ app.post('/api/admin/db/resync', requireAdminAuth, async (req, res) => {
             (select count(*) from api_keys)::int as api_keys`
   )).rows[0];
   return sendOk(res, req, { resynced: true, db_counts: row });
+});
+
+// Phase 4 Stage C:只读往返校验 —— 证明「DB 反向重建态」与文件态逐字段一致。
+// 这是权威翻转(Stage D)前的硬闸门:reconcile 只比计数,本端点比每个镜像字段
+// (含时间戳毫秒、job_id、api_customer_id)。只报告不一致的 集合/id/字段名,绝不返回值。
+app.get('/api/admin/db/verify-roundtrip', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  if (!DB_DUAL_WRITE || !DATABASE_URL) {
+    return sendError(res, req, 409, 'db_dual_write_disabled', 'DB dual-write is not enabled');
+  }
+  const dbState = await loadCreditsStateFromDb();
+  if (!dbState) {
+    return sendError(res, req, 503, 'db_unavailable', 'failed to read state from DB');
+  }
+  const fileState = creditsRepository.readState();
+  const diff = diffCreditsStates(fileState, dbState);
+  return sendOk(res, req, diff);
 });
 
 app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
