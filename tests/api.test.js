@@ -128,6 +128,10 @@ function setBaseEnv() {
   delete process.env.OPENROUTER_IMAGE_API_KEY;
   delete process.env.OPENROUTER_IMAGE_API_MODEL;
   delete process.env.OPENROUTER_IMAGE_API_BYPASS_SECRET;
+  // Phase 3a 读切换相关 flag:显式清理,避免用例间泄漏导致 overview 来源断言不稳定。
+  delete process.env.DB_READ_CREDITS_OVERVIEW;
+  delete process.env.DB_DUAL_WRITE;
+  delete process.env.DATABASE_URL;
 }
 
 function enableCredits(file) {
@@ -720,6 +724,7 @@ test('GET /api/admin/overview requires admin token and returns redacted operatio
   assert.equal(overview.body.data.jobs.total, 1);
   assert.equal(overview.body.data.jobs.by_status.succeeded, 1);
   assert.equal(overview.body.data.credits.users, 0);
+  assert.equal(overview.body.data.credits.source, 'file');
   assert.equal(overview.body.data.credits.codes.active, 1);
   assert.equal(overview.body.data.credits.codes.redeemed, 0);
   assert.equal(overview.body.data.config.provider, 'openai');
@@ -727,6 +732,30 @@ test('GET /api/admin/overview requires admin token and returns redacted operatio
   assert.deepEqual(Object.keys(overview.body.data.credits).includes('redemption_codes'), false);
   assert.equal(JSON.stringify(overview.body.data).includes('code_hash'), false);
   assert.equal(JSON.stringify(overview.body.data).includes('user_token_hash'), false);
+});
+
+test('GET /api/admin/overview falls back to file credits when DB read flag is on but DB is unavailable', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  // 读切换 flag 开启,但不提供 DATABASE_URL → getDbPool() 返回 null → 必须回退文件值、不报错。
+  process.env.DB_READ_CREDITS_OVERVIEW = 'true';
+  delete process.env.DB_DUAL_WRITE;
+  delete process.env.DATABASE_URL;
+
+  const app = loadFreshApp();
+  const overview = await request(app)
+    .get('/api/admin/overview')
+    .set('x-admin-token', 'admin-secret');
+
+  assert.equal(overview.status, 200);
+  assert.equal(overview.body.success, true);
+  // 回退路径:数值仍来自文件(种子 1 个 active code、0 用户),来源标记为 file-fallback。
+  assert.equal(overview.body.data.credits.source, 'file-fallback');
+  assert.equal(overview.body.data.credits.users, 0);
+  assert.equal(overview.body.data.credits.codes.active, 1);
 });
 
 test('GET /api/admin/metrics requires admin token and returns runtime counters', async () => {

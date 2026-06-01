@@ -21,6 +21,9 @@ const AUTH_REQUIRED = process.env.AUTH_REQUIRED === 'true' || IS_VERCEL;
 const IMAGE_PROVIDER = (process.env.IMAGE_PROVIDER || 'openai').trim().toLowerCase();
 const DATABASE_URL = (process.env.DATABASE_URL || '').trim();
 const DB_DUAL_WRITE = process.env.DB_DUAL_WRITE === 'true';
+// Phase 3a 读切换:仅 admin overview 的 credits 聚合改从 DB 读(默认关,可独立回滚)。
+// 依赖 getDbPool()——即要求 DB_DUAL_WRITE+DATABASE_URL 已就绪,确保只读已被双写填充的库。
+const DB_READ_CREDITS_OVERVIEW = process.env.DB_READ_CREDITS_OVERVIEW === 'true';
 const EMAIL_AUTH_ENABLED = process.env.EMAIL_AUTH_ENABLED === 'true';
 
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
@@ -2224,6 +2227,7 @@ function buildAdminOverview() {
     },
     credits: {
       enabled: CREDITS_ENABLED,
+      source: 'file',
       users: (creditState.users || []).length,
       accounts: accounts.length,
       available_credits: accounts.reduce((sum, account) => sum + (account.available_credits || 0), 0),
@@ -2244,6 +2248,40 @@ function buildAdminOverview() {
       pending_codes: (emailState.verification_codes || []).length,
     },
   };
+}
+
+// Phase 3a:flag 开启且 DB 可用时,用 DB 聚合覆盖 overview 的 credits 数值。
+// 任何失败都保留文件值(回滚兜底),仅打日志 + 标记 source,绝不抛错阻断 overview。
+async function applyDbCreditsOverview(overview) {
+  if (!DB_READ_CREDITS_OVERVIEW || !overview || !overview.credits) return;
+  const pool = getDbPool();
+  if (!pool) {
+    overview.credits.source = 'file-fallback';
+    return;
+  }
+  try {
+    const q = async (sql) => (await pool.query(sql)).rows[0];
+    const u = await q('select count(*)::int n from users');
+    const w = await q(
+      'select count(*)::int n, coalesce(sum(available_credits),0)::int a, coalesce(sum(reserved_credits),0)::int r from wallets'
+    );
+    const l = await q('select count(*)::int n from credit_ledger');
+    const b = await q('select count(*)::int n from redemption_batches');
+    const c = await q(
+      "select count(*)::int total, count(*) filter (where status='active')::int active, count(*) filter (where status='redeemed')::int redeemed, count(*) filter (where expires_at is not null and expires_at < now())::int expired from redemption_codes"
+    );
+    overview.credits.users = u.n;
+    overview.credits.accounts = w.n;
+    overview.credits.available_credits = w.a;
+    overview.credits.reserved_credits = w.r;
+    overview.credits.ledger_entries = l.n;
+    overview.credits.batches = b.n;
+    overview.credits.codes = { total: c.total, active: c.active, redeemed: c.redeemed, expired: c.expired };
+    overview.credits.source = 'db';
+  } catch (err) {
+    overview.credits.source = 'file-fallback';
+    log('error', 'db_read_credits_overview_failed', { message: err.message });
+  }
 }
 
 // ── 中间件 ──────────────────────────────────────────────
@@ -2518,8 +2556,10 @@ app.post('/api/auth/logout', async (req, res) => {
   });
 });
 
-app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
-  return sendOk(res, req, buildAdminOverview());
+app.get('/api/admin/overview', requireAdminAuth, async (req, res) => {
+  const overview = buildAdminOverview();
+  await applyDbCreditsOverview(overview);
+  return sendOk(res, req, overview);
 });
 
 app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
