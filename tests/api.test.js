@@ -1687,6 +1687,27 @@ test('api key cannot call admin endpoints', async () => {
   assert.equal(res.status, 401);
 });
 
+test('admin api-customers reads report source=file when DB read flag is off (default)', async () => {
+  setupV1Env();
+  delete process.env.DB_READ_API_CUSTOMERS;
+  const app = loadFreshApp();
+  const { customerId } = await provisionCustomer(app, { credits: 50 });
+
+  const list = await request(app)
+    .get('/api/admin/api-customers')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(list.status, 200);
+  assert.equal(list.body.data.source, 'file');
+  assert.ok(list.body.data.customers.length >= 1);
+
+  const usage = await request(app)
+    .get(`/api/admin/api-customers/${customerId}/usage`)
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(usage.status, 200);
+  assert.equal(usage.body.data.source, 'file');
+  assert.equal(usage.body.data.customer_id, customerId);
+});
+
 test('v1 generations charges 20 credits and completes job', async () => {
   setupV1Env();
   const app = loadFreshApp();
