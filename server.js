@@ -24,6 +24,9 @@ const DB_DUAL_WRITE = process.env.DB_DUAL_WRITE === 'true';
 // Phase 3a 读切换:仅 admin overview 的 credits 聚合改从 DB 读(默认关,可独立回滚)。
 // 依赖 getDbPool()——即要求 DB_DUAL_WRITE+DATABASE_URL 已就绪,确保只读已被双写填充的库。
 const DB_READ_CREDITS_OVERVIEW = process.env.DB_READ_CREDITS_OVERVIEW === 'true';
+// Phase 3b 读切换:redemption 列表(batches/codes)改从 DB 读(默认关,独立回滚)。
+// 复用同一份 JS 聚合逻辑,仅替换数据源,避免 SQL 重写引入静默序列化漂移。
+const DB_READ_REDEMPTION_LISTS = process.env.DB_READ_REDEMPTION_LISTS === 'true';
 const EMAIL_AUTH_ENABLED = process.env.EMAIL_AUTH_ENABLED === 'true';
 
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
@@ -613,6 +616,15 @@ function log(level, message, meta = {}) {
 
 function toIsoOrNull(value) {
   if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : new Date(time).toISOString();
+}
+
+// pg 把 timestamptz 解析为 JS Date(毫秒精度)。直接 .toISOString() 与文件存的
+// ISO 串逐字节一致;切勿走 toIsoOrNull(它对 Date 会先字符串化,丢掉毫秒 → 静默漂移)。
+function dbValueToIso(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
@@ -1593,8 +1605,8 @@ function createRedemptionBatch({ name, count, creditsPerCode, prefix, expiresAt 
   });
 }
 
-function listRedemptionBatches(limit = 50) {
-  const state = creditsRepository.readState();
+function listRedemptionBatches(limit = 50, stateOverride = null) {
+  const state = stateOverride || creditsRepository.readState();
   const byBatch = new Map();
   for (const item of state.redemption_codes || []) {
     if (!byBatch.has(item.batch_id)) {
@@ -1623,8 +1635,8 @@ function listRedemptionBatches(limit = 50) {
   return batches;
 }
 
-function listRedemptionCodes({ batchId, status, limit = 100 }) {
-  const state = creditsRepository.readState();
+function listRedemptionCodes({ batchId, status, limit = 100 }, stateOverride = null) {
+  const state = stateOverride || creditsRepository.readState();
   let codes = (state.redemption_codes || []).slice();
   if (batchId) {
     codes = codes.filter((item) => item.batch_id === batchId);
@@ -2284,6 +2296,56 @@ async function applyDbCreditsOverview(overview) {
   }
 }
 
+// Phase 3b:flag 开且 DB 可用时,从 DB 取 redemption 状态(batches+codes),供
+// listRedemption* 复用同一份 JS 聚合/排序/脱敏 —— 只换数据源,不重写 SQL 逻辑。
+// 显式逐字段映射(防 DB 多余列经 batch 的 ...spread 泄漏);时间戳一律走
+// dbValueToIso 保毫秒精度;绝不 select code_hash;ORDER BY 保证 DB 侧确定性。
+// 失败/不可用返回 null → 调用方回退文件值。
+async function loadRedemptionDbState() {
+  if (!DB_READ_REDEMPTION_LISTS) return null;
+  const pool = getDbPool();
+  if (!pool) return null;
+  try {
+    const batchRows = (await pool.query(
+      'select id, name, credits_per_code, code_count, expires_at, created_at from redemption_batches order by created_at, id'
+    )).rows;
+    const codeRows = (await pool.query(
+      'select id, batch_id, code_hint, credits, status, redeemed_by_user_id, redeemed_at, revoked_at, expires_at, created_at from redemption_codes order by created_at, id'
+    )).rows;
+    return {
+      redemption_batches: batchRows.map((b) => ({
+        id: b.id,
+        name: b.name,
+        credits_per_code: b.credits_per_code,
+        code_count: b.code_count,
+        expires_at: dbValueToIso(b.expires_at),
+        created_at: dbValueToIso(b.created_at),
+      })),
+      redemption_codes: codeRows.map((c) => ({
+        id: c.id,
+        batch_id: c.batch_id,
+        code_hint: c.code_hint || null,
+        credits: c.credits,
+        status: c.status,
+        redeemed_by_user_id: c.redeemed_by_user_id || null,
+        redeemed_at: dbValueToIso(c.redeemed_at),
+        revoked_at: dbValueToIso(c.revoked_at),
+        expires_at: dbValueToIso(c.expires_at),
+        created_at: dbValueToIso(c.created_at),
+      })),
+    };
+  } catch (err) {
+    log('error', 'db_read_redemption_lists_failed', { message: err.message });
+    return null;
+  }
+}
+
+// source 语义与 overview 对齐:flag 关→file;flag 开且读到→db;flag 开但不可用/出错→file-fallback。
+function redemptionListSource(dbState) {
+  if (dbState) return 'db';
+  return DB_READ_REDEMPTION_LISTS ? 'file-fallback' : 'file';
+}
+
 // ── 中间件 ──────────────────────────────────────────────
 app.set('trust proxy', 1);
 app.use((req, res, next) => {
@@ -2752,18 +2814,20 @@ app.post('/api/admin/redemption-batches', requireAdminAuth, async (req, res) => 
   }, 201);
 });
 
-app.get('/api/admin/redemption-batches', requireAdminAuth, (req, res) => {
+app.get('/api/admin/redemption-batches', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
   }
   const limit = Number(req.query && req.query.limit) || 50;
   const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 200) : 50;
+  const dbState = await loadRedemptionDbState();
   return sendOk(res, req, {
-    batches: listRedemptionBatches(safeLimit),
+    batches: listRedemptionBatches(safeLimit, dbState),
+    source: redemptionListSource(dbState),
   });
 });
 
-app.get('/api/admin/redemption-codes', requireAdminAuth, (req, res) => {
+app.get('/api/admin/redemption-codes', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
   }
@@ -2771,8 +2835,10 @@ app.get('/api/admin/redemption-codes', requireAdminAuth, (req, res) => {
   const status = req.query && typeof req.query.status === 'string' ? req.query.status : '';
   const limit = Number(req.query && req.query.limit) || 100;
   const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 500) : 100;
+  const dbState = await loadRedemptionDbState();
   return sendOk(res, req, {
-    codes: listRedemptionCodes({ batchId, status, limit: safeLimit }),
+    codes: listRedemptionCodes({ batchId, status, limit: safeLimit }, dbState),
+    source: redemptionListSource(dbState),
   });
 });
 

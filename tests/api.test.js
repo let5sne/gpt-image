@@ -1047,6 +1047,69 @@ test('admin redemption APIs create batches, list redacted codes, and revoke acti
   assert.equal(revokeAgain.status, 409);
 });
 
+test('redemption list endpoints report source=file when DB read flag is off', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  delete process.env.DB_READ_REDEMPTION_LISTS;
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  await request(app)
+    .post('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'flag-off', count: 2, credits_per_code: 25, prefix: 'OFF' });
+
+  const batches = await request(app)
+    .get('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(batches.status, 200);
+  assert.equal(batches.body.data.source, 'file');
+  assert.ok(batches.body.data.batches.length >= 1);
+
+  const codes = await request(app)
+    .get('/api/admin/redemption-codes')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(codes.status, 200);
+  assert.equal(codes.body.data.source, 'file');
+  assert.equal(JSON.stringify(codes.body.data).includes('code_hash'), false);
+});
+
+test('redemption list endpoints fall back to file when DB read flag is on but DB unavailable', async () => {
+  setBaseEnv();
+  process.env.ADMIN_TOKEN = 'admin-secret';
+  process.env.DB_READ_REDEMPTION_LISTS = 'true';
+  delete process.env.DB_DUAL_WRITE;
+  delete process.env.DATABASE_URL;
+  const creditsFile = path.join(createTempDir(), 'credits.json');
+  enableCredits(creditsFile);
+  seedCreditsFile(creditsFile);
+  const app = loadFreshApp();
+
+  await request(app)
+    .post('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret')
+    .send({ name: 'fallback', count: 2, credits_per_code: 30, prefix: 'FBK' });
+
+  const batches = await request(app)
+    .get('/api/admin/redemption-batches')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(batches.status, 200);
+  assert.equal(batches.body.data.source, 'file-fallback');
+  assert.ok(batches.body.data.batches.length >= 1);
+
+  const codes = await request(app)
+    .get('/api/admin/redemption-codes')
+    .set('x-admin-token', 'admin-secret');
+  assert.equal(codes.status, 200);
+  assert.equal(codes.body.data.source, 'file-fallback');
+  assert.equal(codes.body.data.codes.length >= 2, true);
+  assert.equal(JSON.stringify(codes.body.data).includes('code_hash'), false);
+
+  delete process.env.DB_READ_REDEMPTION_LISTS;
+});
+
 test('admin actions append audit logs for grant and redemption operations', async () => {
   setBaseEnv();
   process.env.ADMIN_TOKEN = 'admin-secret';
