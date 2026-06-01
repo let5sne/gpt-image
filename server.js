@@ -27,6 +27,10 @@ const DB_READ_CREDITS_OVERVIEW = process.env.DB_READ_CREDITS_OVERVIEW === 'true'
 // Phase 3b 读切换:redemption 列表(batches/codes)改从 DB 读(默认关,独立回滚)。
 // 复用同一份 JS 聚合逻辑,仅替换数据源,避免 SQL 重写引入静默序列化漂移。
 const DB_READ_REDEMPTION_LISTS = process.env.DB_READ_REDEMPTION_LISTS === 'true';
+// Phase 4 Stage D 读切换:admin api-customers 列表/用量改从 DB 读(默认关,独立回滚)。
+// 仅限只读 admin 报表路径——容忍异步镜像的有界滞后;计费决策读(鉴权/预扣)绝不切。
+// 复用 Stage C 已 prod 验证无损的 loadCreditsStateFromDb(),失败回退文件态。
+const DB_READ_API_CUSTOMERS = process.env.DB_READ_API_CUSTOMERS === 'true';
 const EMAIL_AUTH_ENABLED = process.env.EMAIL_AUTH_ENABLED === 'true';
 
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
@@ -2509,6 +2513,19 @@ function diffCreditsStates(fileState, dbState) {
   return { ok, collections };
 }
 
+// Phase 4 Stage D:admin api-customers 只读路径的数据源选择。
+// flag 开且 DB 重建成功 → 用 DB 态(source=db);DB 不可用/重建失败 → 回退文件态
+// (source=file-fallback);flag 关 → 文件态(source=file)。仅用于只读 admin 报表,
+// 容忍异步镜像的有界滞后;计费决策读(鉴权/预扣)绝不走此路径。
+async function readApiCustomersState() {
+  if (DB_READ_API_CUSTOMERS) {
+    const dbState = await loadCreditsStateFromDb();
+    if (dbState) return { state: dbState, source: 'db' };
+    return { state: creditsRepository.readState(), source: 'file-fallback' };
+  }
+  return { state: creditsRepository.readState(), source: 'file' };
+}
+
 // source 语义与 overview 对齐:flag 关→file;flag 开且读到→db;flag 开但不可用/出错→file-fallback。
 function redemptionListSource(dbState) {
   if (dbState) return 'db';
@@ -3117,20 +3134,20 @@ app.post('/api/admin/api-customers', requireAdminAuth, async (req, res) => {
   return sendOk(res, req, customer, 201);
 });
 
-app.get('/api/admin/api-customers', requireAdminAuth, (req, res) => {
+app.get('/api/admin/api-customers', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
   }
-  const state = creditsRepository.readState();
+  const { state, source } = await readApiCustomersState();
   const customers = (state.api_customers || []).map((customer) => serializeApiCustomer(state, customer));
-  return sendOk(res, req, { customers });
+  return sendOk(res, req, { customers, source });
 });
 
-app.get('/api/admin/api-customers/:id/usage', requireAdminAuth, (req, res) => {
+app.get('/api/admin/api-customers/:id/usage', requireAdminAuth, async (req, res) => {
   if (!CREDITS_ENABLED) {
     return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
   }
-  const state = creditsRepository.readState();
+  const { state, source } = await readApiCustomersState();
   const customer = (state.api_customers || []).find((item) => item.id === req.params.id);
   if (!customer) {
     return sendError(res, req, 404, 'customer_not_found', 'api customer not found');
@@ -3138,6 +3155,7 @@ app.get('/api/admin/api-customers/:id/usage', requireAdminAuth, (req, res) => {
   const usage = summarizeCustomerUsage(state, customer.user_id);
   return sendOk(res, req, {
     customer_id: customer.id,
+    source,
     ...usage,
   });
 });
