@@ -37,15 +37,37 @@ release、admin grant、batch create/revoke(它们都最终走 `writeCreditsStat
 
 ### Phase 3（读切换）
 
-- 先切 admin 只读查询到 DB（overview/metrics）。
-- 再切 wallet 和 redemption 查询到 DB。
-- 文件作为短期回滚兜底。
+- **Phase 3a — 已实现 + 已激活 + 已验证**:admin overview 的 credits 聚合
+  (users/wallets/ledger/batches/codes 计数与余额汇总)改从 DB 读。
+  - flag `DB_READ_CREDITS_OVERVIEW=true`(独立于双写,默认关,随时可关回退)。
+  - `buildAdminOverview()` 同步零改动;新增 `applyDbCreditsOverview()` 用
+    reconcile 同款 SQL 覆盖数值并标 `credits.source='db'`;任何失败保留文件值、
+    标 `source='file'|'file-fallback'`、打日志,绝不抛错(文件即回滚兜底)。
+  - 生产已验证 `source=db` 且 9 项数值与文件逐项一致。
+- **Phase 3b — 暂缓(按设计)**:redemption-batches/redemption-codes 列表端点
+  返回整行,DB 读须**逐字段复刻**文件序列化(timestamptz 格式、code_stats
+  GROUP BY、`code_preview` 脱敏)。这类**静默序列化漂移**正是 error-only
+  fallback 抓不到的;且端点仅 admin、非热路径,价值低。收益<风险,暂不切。
+- 其余 admin 端点(metrics/audit-logs/email-users/api-customers*)读取**未镜像**
+  的数据(运行时计数、文件日志、email-auth、api_customers/api_keys),不可切。
 
-### Phase 4（收口）
+### Phase 4（收口)— 需决策,未实施
 
-- 关闭文件主写。
-- 保留导出回滚工具。
-- 只保留必要本地缓存文件。
+> ⚠️ 架构级、难回退、涉及金额(credit ledger)。即使在"直接切换"授权下也应先确认方案。
+
+- 关闭文件主写、DB 成为权威源。**真实成本**:14 处 `withLock`+`writeState` 的
+  read-modify-write 写路径须改为 DB 事务等价物(含 reserve/settle/release/redeem/
+  grant/batch),并保证幂等与并发正确性。
+- 前置:DB 写须从"best-effort 双写(`.catch` 吞错)"升级为"写失败即报错",
+  否则 DB 落后于文件时读 DB 会取到陈旧数据。
+- 保留导出回滚工具;只保留必要本地缓存文件。
+
+## 发布就绪状态(pre-launch)
+
+当前已是**可发布**形态:文件为权威主存储(经实战验证)、DB 为已验证影子、
+admin overview 读 DB。双写失败不阻塞文件主路径,读切换失败回退文件值。
+Phase 3b / Phase 4 均为**发布后可选的收口**,非发布阻塞项。
+
 
 ## 表映射建议
 
