@@ -24,6 +24,7 @@ function arr(value) {
 function fileMetrics(credits) {
   const wallets = arr(credits.accounts);
   const codes = arr(credits.redemption_codes);
+  const keys = arr(credits.api_keys);
   return {
     users: arr(credits.users).length,
     wallets: wallets.length,
@@ -34,6 +35,9 @@ function fileMetrics(credits) {
     codes: codes.length,
     redeemed: codes.filter((c) => c.status === 'redeemed').length,
     revoked: codes.filter((c) => c.status === 'revoked').length,
+    api_customers: arr(credits.api_customers).length,
+    api_keys: keys.length,
+    api_keys_active: keys.filter((k) => k.status === 'active').length,
   };
 }
 
@@ -49,6 +53,10 @@ async function dbMetrics(pool) {
   const c = await q(
     "select count(*)::int n, count(*) filter (where status='redeemed')::int redeemed, count(*) filter (where status='revoked')::int revoked from redemption_codes"
   );
+  const ac = await q('select count(*)::int n from api_customers');
+  const ak = await q(
+    "select count(*)::int n, count(*) filter (where status='active')::int active from api_keys"
+  );
   return {
     users: u.n,
     wallets: w.n,
@@ -59,6 +67,9 @@ async function dbMetrics(pool) {
     codes: c.n,
     redeemed: c.redeemed,
     revoked: c.revoked,
+    api_customers: ac.n,
+    api_keys: ak.n,
+    api_keys_active: ak.active,
   };
 }
 async function main() {

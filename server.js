@@ -671,14 +671,16 @@ async function dualWriteCreditsSnapshot(state, reason) {
     await client.query('begin');
     await client.query('delete from credit_ledger');
     await client.query('delete from redemption_codes');
+    await client.query('delete from api_keys');
+    await client.query('delete from api_customers');
     await client.query('delete from wallets');
     await client.query('delete from users');
     await client.query('delete from redemption_batches');
 
     for (const user of state.users || []) {
       await client.query(
-        'insert into users(id, user_token_hash, status, created_at, updated_at) values ($1,$2,$3,$4,$5)',
-        [user.id, user.user_token_hash, user.status || 'active', toIsoOrNull(user.created_at) || nowIso(), toIsoOrNull(user.updated_at) || nowIso()]
+        'insert into users(id, user_token_hash, api_customer_id, status, created_at, updated_at) values ($1,$2,$3,$4,$5,$6)',
+        [user.id, user.user_token_hash, asUuidOrNull(user.api_customer_id), user.status || 'active', toIsoOrNull(user.created_at) || nowIso(), toIsoOrNull(user.updated_at) || nowIso()]
       );
     }
 
@@ -686,6 +688,20 @@ async function dualWriteCreditsSnapshot(state, reason) {
       await client.query(
         'insert into wallets(id, user_id, available_credits, reserved_credits, created_at, updated_at) values ($1,$2,$3,$4,$5,$6)',
         [account.id, account.user_id, account.available_credits || 0, account.reserved_credits || 0, toIsoOrNull(account.created_at) || nowIso(), toIsoOrNull(account.updated_at) || nowIso()]
+      );
+    }
+
+    for (const customer of state.api_customers || []) {
+      await client.query(
+        'insert into api_customers(id, name, contact, status, note, user_id, created_at, updated_at) values ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [customer.id, customer.name, customer.contact || null, customer.status || 'active', customer.note || null, customer.user_id, toIsoOrNull(customer.created_at) || nowIso(), toIsoOrNull(customer.updated_at) || nowIso()]
+      );
+    }
+
+    for (const key of state.api_keys || []) {
+      await client.query(
+        'insert into api_keys(id, customer_id, key_hash, key_prefix, status, expires_at, note, last_used_at, revoked_at, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [key.id, key.customer_id, key.key_hash, key.key_prefix || null, key.status || 'active', toIsoOrNull(key.expires_at), key.note || null, toIsoOrNull(key.last_used_at), toIsoOrNull(key.revoked_at), toIsoOrNull(key.created_at) || nowIso()]
       );
     }
 
@@ -718,7 +734,7 @@ async function dualWriteCreditsSnapshot(state, reason) {
 
     for (const ledger of state.credit_ledger || []) {
       await client.query(
-        'insert into credit_ledger(id, user_id, type, credits_delta, available_after, reserved_after, reservation_id, redemption_code_id, note, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        'insert into credit_ledger(id, user_id, type, credits_delta, available_after, reserved_after, reservation_id, redemption_code_id, job_id, note, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
         [
           ledger.id,
           ledger.user_id,
@@ -728,6 +744,7 @@ async function dualWriteCreditsSnapshot(state, reason) {
           ledger.reserved_after || 0,
           asUuidOrNull(ledger.job_id),
           asUuidOrNull(ledger.redemption_code_id),
+          ledger.job_id || null,
           ledger.note || null,
           toIsoOrNull(ledger.created_at) || nowIso(),
         ]

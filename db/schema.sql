@@ -5,6 +5,8 @@ create table if not exists users (
   id uuid primary key,
   -- nullable: API-customer-backed users authenticate via API keys, not a token hash
   user_token_hash text unique,
+  -- back-pointer to the API customer this user backs (null for token/redeem users)
+  api_customer_id uuid,
   status text not null default 'active',
   created_at timestamptz not null,
   updated_at timestamptz not null
@@ -29,6 +31,9 @@ create table if not exists credit_ledger (
   reserved_after integer not null,
   reservation_id uuid,
   redemption_code_id uuid,
+  -- file-side ledger job_id: usually a reservation UUID, but may be a non-UUID
+  -- Replicate prediction id — store verbatim as text for lossless round-trip.
+  job_id text,
   note text,
   created_at timestamptz not null
 );
@@ -60,6 +65,33 @@ create table if not exists redemption_codes (
 );
 create index if not exists idx_redemption_codes_batch on redemption_codes(batch_id);
 create index if not exists idx_redemption_codes_status on redemption_codes(status);
+
+create table if not exists api_customers (
+  id uuid primary key,
+  name text not null,
+  contact text,
+  status text not null default 'active',
+  note text,
+  user_id uuid not null references users(id) on delete cascade,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+create index if not exists idx_api_customers_user on api_customers(user_id);
+
+create table if not exists api_keys (
+  id uuid primary key,
+  customer_id uuid not null references api_customers(id) on delete cascade,
+  key_hash text not null unique,
+  key_prefix text,
+  status text not null default 'active',
+  expires_at timestamptz,
+  note text,
+  last_used_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null
+);
+create index if not exists idx_api_keys_customer on api_keys(customer_id);
+create index if not exists idx_api_keys_status on api_keys(status);
 
 create table if not exists generation_jobs (
   id uuid primary key,
