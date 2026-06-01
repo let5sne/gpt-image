@@ -2641,6 +2641,36 @@ app.get('/api/admin/overview', requireAdminAuth, async (req, res) => {
   return sendOk(res, req, overview);
 });
 
+// Phase 4 迁移工具:用「与生产完全相同的双写路径」把文件态全量重镜像到 DB,
+// 再回读 DB 计数即时自检。用途:迁移 002 后填充新表,或任何镜像漂移时手动重同步。
+// 无副作用(不改文件态);经同一串行队列入队,避免与并发 writeState 双写竞态。
+app.post('/api/admin/db/resync', requireAdminAuth, async (req, res) => {
+  if (!CREDITS_ENABLED) {
+    return sendError(res, req, 404, 'credits_disabled', 'credits are not enabled');
+  }
+  if (!DB_DUAL_WRITE || !DATABASE_URL) {
+    return sendError(res, req, 409, 'db_dual_write_disabled', 'DB dual-write is not enabled');
+  }
+  const pool = getDbPool();
+  if (!pool) {
+    return sendError(res, req, 503, 'db_unavailable', 'DB pool is not available');
+  }
+  const state = creditsRepository.readState();
+  enqueueCreditsSnapshotDualWrite(state, 'admin_resync');
+  await creditsDualWriteQueue;
+  // 单条静态 SQL(无插值),回读全 7 集合计数作为即时验证
+  const row = (await pool.query(
+    `select (select count(*) from users)::int as users,
+            (select count(*) from wallets)::int as wallets,
+            (select count(*) from credit_ledger)::int as credit_ledger,
+            (select count(*) from redemption_batches)::int as redemption_batches,
+            (select count(*) from redemption_codes)::int as redemption_codes,
+            (select count(*) from api_customers)::int as api_customers,
+            (select count(*) from api_keys)::int as api_keys`
+  )).rows[0];
+  return sendOk(res, req, { resynced: true, db_counts: row });
+});
+
 app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
   return sendOk(res, req, {
     started_at: new Date(processStartedAt).toISOString(),
