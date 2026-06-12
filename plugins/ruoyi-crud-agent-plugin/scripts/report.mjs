@@ -6,6 +6,7 @@ import { getFrontendGeneratedFiles } from './lib/frontend-generator.mjs';
 import { writeReports } from './lib/report-writer.mjs';
 import { loadAndValidateSpec, pluginRoot, SpecInputError } from './lib/spec-loader.mjs';
 import { loadVersionLock, sandboxRoot } from './lib/version-lock.mjs';
+import { verifyModule } from './verify-module.mjs';
 
 function printJson(stream, payload) {
   stream.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -20,30 +21,26 @@ function generatedFileList(spec) {
   ].map((entry) => entry.relativePath);
 }
 
-function reportPayload(spec) {
+function reportCommands(verifyResult) {
+  return [
+    ...(verifyResult.environment?.commands || []),
+    verifyResult.backendCompile,
+    verifyResult.frontendInstall,
+    verifyResult.frontendBuild,
+  ].filter(Boolean);
+}
+
+function reportPayload(spec, verifyResult) {
   const versions = loadVersionLock();
   return {
-    status: 'PLANNED',
+    status: verifyResult.ok ? 'PASS' : 'FAIL',
     module: spec.module,
     versions: {
       ruoyiVuePlus: versions.ruoyiVuePlus,
       plusUi: versions.plusUi,
     },
-    commands: [
-      {
-        commandLine: 'npm run validate',
-        statusText: 'planned',
-      },
-      {
-        commandLine: 'npm run generate',
-        statusText: 'planned',
-      },
-      {
-        commandLine: 'npm run verify',
-        statusText: 'planned',
-      },
-    ],
-    generatedFiles: generatedFileList(spec),
+    commands: reportCommands(verifyResult),
+    generatedFiles: verifyResult.static?.generatedFiles || generatedFileList(spec),
   };
 }
 
@@ -57,8 +54,21 @@ export function writeSpecReport(specPath, options = {}) {
     };
   }
 
+  const verifyResult = options.verifyResult || verifyModule(specPath, {
+    backendRoot: options.backendRoot,
+    frontendRoot: options.frontendRoot,
+    runCommand: options.runCommand,
+  });
+  if (!verifyResult?.ok) {
+    return {
+      ok: false,
+      code: verifyResult ? 'verification_failed' : 'verification_missing',
+      verification: verifyResult,
+    };
+  }
+
   const reportDir = options.reportDir || path.join(pluginRoot, 'reports');
-  const reports = writeReports(reportDir, reportPayload(result.spec));
+  const reports = writeReports(reportDir, reportPayload(result.spec, verifyResult));
 
   return {
     ok: true,
@@ -80,7 +90,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
 
   try {
     const output = writeSpecReport(specPath);
-    if (output.code === 'invalid_spec') {
+    if (!output.ok) {
       printJson(process.stderr, output);
       process.exit(1);
     }

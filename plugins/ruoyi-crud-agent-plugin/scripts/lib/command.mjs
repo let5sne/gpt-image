@@ -1,11 +1,14 @@
 import { spawnSync } from 'node:child_process';
 
+export const DEFAULT_MAX_BUFFER = 128 * 1024 * 1024;
+
 export function runCommand(command, args, options = {}) {
   const cwd = options.cwd || process.cwd();
   const result = spawnSync(command, args, {
     ...options,
     shell: false,
     encoding: 'utf8',
+    maxBuffer: options.maxBuffer || DEFAULT_MAX_BUFFER,
   });
 
   if (result.error) {

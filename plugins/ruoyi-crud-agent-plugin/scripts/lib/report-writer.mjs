@@ -32,8 +32,11 @@ function commandStatus(command) {
   if (command.statusText) {
     return command.statusText;
   }
+  if (command.skipped) {
+    return command.reason ? `skipped (${command.reason})` : 'skipped';
+  }
   if (command.status === undefined || command.status === null) {
-    return command.ok === false ? 'failed' : 'planned';
+    return command.ok === false ? 'failed' : 'unknown';
   }
   return command.status === 0 ? 'passed' : `failed (${command.status})`;
 }
