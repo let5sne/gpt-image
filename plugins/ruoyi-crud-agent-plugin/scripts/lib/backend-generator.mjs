@@ -160,16 +160,6 @@ function createBusinessPom() {
 </project>`;
 }
 
-function injectModulePom(content) {
-  if (content.includes('<module>ruoyi-business</module>')) {
-    return content;
-  }
-  if (content.includes('</modules>')) {
-    return content.replace('</modules>', '    <module>ruoyi-business</module>\n  </modules>');
-  }
-  return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
-}
-
 function activeXmlContent(content) {
   return content.replace(/<!--[\s\S]*?-->/g, '');
 }
@@ -184,6 +174,37 @@ function replaceActiveXml(content, replacer) {
   }
   output += replacer(content.slice(lastIndex));
   return output;
+}
+
+function replaceFirstActiveXml(content, search, replacement) {
+  let replaced = false;
+  const output = replaceActiveXml(content, (activeContent) => {
+    if (replaced || !activeContent.includes(search)) {
+      return activeContent;
+    }
+    replaced = true;
+    return activeContent.replace(search, replacement);
+  });
+
+  return { output, replaced };
+}
+
+function injectModulePom(content) {
+  if (activeXmlContent(content).includes('<module>ruoyi-business</module>')) {
+    return content;
+  }
+  if (activeXmlContent(content).includes('</modules>')) {
+    return replaceFirstActiveXml(
+      content,
+      '</modules>',
+      '    <module>ruoyi-business</module>\n  </modules>',
+    ).output;
+  }
+  return replaceFirstActiveXml(
+    content,
+    '</project>',
+    '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>',
+  ).output;
 }
 
 function adminDependencyVersion(content) {
@@ -224,10 +245,18 @@ function injectAdminPom(content) {
   if (activeXmlContent(content).includes('<artifactId>ruoyi-business</artifactId>')) {
     return ensureAdminDependencyVersion(content, version);
   }
-  if (content.includes('</dependencies>')) {
-    return content.replace('</dependencies>', `${adminDependencyXml(version)}\n  </dependencies>`);
+  if (activeXmlContent(content).includes('</dependencies>')) {
+    return replaceFirstActiveXml(
+      content,
+      '</dependencies>',
+      `${adminDependencyXml(version)}\n  </dependencies>`,
+    ).output;
   }
-  return content.replace('</project>', `  <dependencies>\n${adminDependencyXml(version)}\n  </dependencies>\n</project>`);
+  return replaceFirstActiveXml(
+    content,
+    '</project>',
+    `  <dependencies>\n${adminDependencyXml(version)}\n  </dependencies>\n</project>`,
+  ).output;
 }
 
 function upsertModulesPom(filePath) {

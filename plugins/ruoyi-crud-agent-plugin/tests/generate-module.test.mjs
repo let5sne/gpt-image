@@ -434,6 +434,83 @@ ${commentedDependency}
   assert.equal(countMatches(businessDependency, /<version>/g), 1);
 });
 
+test('commented dependencies block does not steal admin POM dependency insertion', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const adminPomPath = path.join(backendRoot, 'ruoyi-admin/pom.xml');
+  fs.mkdirSync(path.dirname(adminPomPath), { recursive: true });
+  const commentedDependencies = `  <!--
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+    </dependency>
+  </dependencies>
+  -->`;
+  fs.writeFileSync(adminPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-vue-plus</artifactId>
+    <version>\${revision}</version>
+  </parent>
+${commentedDependencies}
+  <artifactId>ruoyi-admin</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-system</artifactId>
+    </dependency>
+  </dependencies>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const adminPom = fs.readFileSync(adminPomPath, 'utf8');
+  const activeContent = activeXmlContent(adminPom);
+  const businessDependency = businessDependencyBlock(adminPom);
+
+  assert.ok(adminPom.includes(commentedDependencies));
+  assert.equal(countMatches(activeContent, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>\$\{revision\}<\/version>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>/g), 1);
+});
+
+test('commented ruoyi-business module does not block active modules POM insertion', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const modulesPomPath = path.join(backendRoot, 'ruoyi-modules/pom.xml');
+  fs.mkdirSync(path.dirname(modulesPomPath), { recursive: true });
+  const commentedModule = `  <!--
+  <modules>
+    <module>ruoyi-business</module>
+  </modules>
+  -->`;
+  fs.writeFileSync(modulesPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>ruoyi-modules</artifactId>
+${commentedModule}
+  <modules>
+    <module>ruoyi-system</module>
+  </modules>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const modulesPom = fs.readFileSync(modulesPomPath, 'utf8');
+  const activeContent = activeXmlContent(modulesPom);
+
+  assert.ok(modulesPom.includes(commentedModule));
+  assert.equal(countMatches(activeContent, /<module>ruoyi-business<\/module>/g), 1);
+  assert.equal(countMatches(activeContent, /<module>ruoyi-system<\/module>/g), 1);
+});
+
 test('force overwrites generated files and POM updates stay idempotent', () => {
   const root = tempRoot();
   const backendRoot = path.join(root, 'backend');
