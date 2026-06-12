@@ -1,0 +1,639 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+export const javaTypeBySpecType = {
+  string: 'String',
+  integer: 'Integer',
+  enum: 'String',
+};
+
+export const sqlTypeBySpecType = {
+  string: 'varchar(128)',
+  integer: 'int',
+  enum: 'varchar(32)',
+};
+
+const BUSINESS_ARTIFACT = 'ruoyi-business';
+
+function upperFirst(value) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function toSnakeCase(value) {
+  return value.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
+}
+
+function moduleContext(spec) {
+  const className = spec.derived.className;
+  const variableName = spec.derived.variableName;
+  const packageName = spec.derived.backendPackage;
+  const packagePath = spec.derived.backendPackagePath;
+  const mapperNamespace = `${packageName}.mapper.${className}Mapper`;
+  const resourceSegment = packageName.split('.').at(-1);
+  const fields = spec.fields;
+
+  return {
+    className,
+    variableName,
+    packageName,
+    packagePath,
+    mapperNamespace,
+    resourceSegment,
+    fields,
+    fieldMethods: fields.map((field) => ({
+      ...field,
+      javaType: javaTypeBySpecType[field.type],
+      columnName: toSnakeCase(field.name),
+      accessorName: upperFirst(field.name),
+    })),
+  };
+}
+
+function absoluteTarget(root, relativePath) {
+  return path.resolve(root, relativePath);
+}
+
+function writeFile(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${content.trimEnd()}\n`);
+}
+
+function createMinimalModulesPom() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.dromara</groupId>
+  <artifactId>ruoyi-modules</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>ruoyi-business</module>
+  </modules>
+</project>`;
+}
+
+function createMinimalAdminPom() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.dromara</groupId>
+  <artifactId>ruoyi-admin</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>`;
+}
+
+function createBusinessPom() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-modules</artifactId>
+    <version>${'${revision}'}</version>
+  </parent>
+
+  <artifactId>ruoyi-business</artifactId>
+  <description>业务模块</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-doc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-mybatis</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-log</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-excel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-idempotent</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-common-satoken</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-system</artifactId>
+    </dependency>
+  </dependencies>
+</project>`;
+}
+
+function injectModulePom(content) {
+  if (content.includes('<module>ruoyi-business</module>')) {
+    return content;
+  }
+  if (content.includes('</modules>')) {
+    return content.replace('</modules>', '    <module>ruoyi-business</module>\n  </modules>');
+  }
+  if (content.includes('</project>')) {
+    return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
+  }
+  return content;
+}
+
+function adminDependencyXml(includeVersion = false) {
+  const versionLine = includeVersion ? '      <version>1.0.0</version>\n' : '';
+  return `    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+${versionLine}    </dependency>`;
+}
+
+function injectAdminPom(content) {
+  if (content.includes('<artifactId>ruoyi-business</artifactId>')) {
+    return content;
+  }
+  if (content.includes('</dependencies>')) {
+    return content.replace('</dependencies>', `${adminDependencyXml()}\n  </dependencies>`);
+  }
+  if (content.includes('</project>')) {
+    return content.replace('</project>', `  <dependencies>\n${adminDependencyXml()}\n  </dependencies>\n</project>`);
+  }
+  return content;
+}
+
+function upsertModulesPom(filePath) {
+  if (!fs.existsSync(filePath)) {
+    writeFile(filePath, createMinimalModulesPom());
+    return;
+  }
+  const next = injectModulePom(fs.readFileSync(filePath, 'utf8'));
+  fs.writeFileSync(filePath, next);
+}
+
+function upsertAdminPom(filePath) {
+  if (!fs.existsSync(filePath)) {
+    writeFile(filePath, createMinimalAdminPom());
+    return;
+  }
+  const next = injectAdminPom(fs.readFileSync(filePath, 'utf8'));
+  fs.writeFileSync(filePath, next);
+}
+
+function fieldDeclarations(context) {
+  return context.fieldMethods.map((field) => `    /**
+     * ${field.title}
+     */
+    @ExcelProperty(value = "${field.title}")
+    private ${field.javaType} ${field.name};`).join('\n\n');
+}
+
+function domainFieldDeclarations(context) {
+  return context.fieldMethods.map((field) => `    /**
+     * ${field.title}
+     */
+    private ${field.javaType} ${field.name};`).join('\n\n');
+}
+
+function fieldResultMappings(context) {
+  return context.fieldMethods.map((field) => `        <result property="${field.name}" column="${field.columnName}"/>`).join('\n');
+}
+
+function fieldColumns(context) {
+  return context.fieldMethods.map((field) => field.columnName).join(', ');
+}
+
+function fieldXmlConditions(context, prefix) {
+  return context.fieldMethods.map((field) => {
+    if (field.type === 'string' || field.type === 'enum') {
+      return `            <if test="${prefix}.${field.name} != null and ${prefix}.${field.name} != ''">and ${field.columnName} = #{${prefix}.${field.name}}</if>`;
+    }
+    return `            <if test="${prefix}.${field.name} != null">and ${field.columnName} = #{${prefix}.${field.name}}</if>`;
+  }).join('\n');
+}
+
+function controllerTemplate(spec, context) {
+  const { className, variableName, packageName } = context;
+  return `package ${packageName}.controller;
+
+import cn.dev33.satoken.annotation.SaCheckPermission;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import lombok.RequiredArgsConstructor;
+import org.dromara.common.core.domain.R;
+import org.dromara.common.excel.utils.ExcelUtil;
+import org.dromara.common.idempotent.annotation.RepeatSubmit;
+import org.dromara.common.log.annotation.Log;
+import org.dromara.common.log.enums.BusinessType;
+import org.dromara.common.mybatis.core.page.PageQuery;
+import org.dromara.common.mybatis.core.page.TableDataInfo;
+import org.dromara.common.web.core.BaseController;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import ${packageName}.domain.bo.${className}Bo;
+import ${packageName}.domain.vo.${className}Vo;
+import ${packageName}.service.I${className}Service;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * ${spec.module.title}
+ */
+@Validated
+@RequiredArgsConstructor
+@RestController
+@RequestMapping("${spec.derived.apiBase}")
+public class ${className}Controller extends BaseController {
+
+    private final I${className}Service ${variableName}Service;
+
+    @SaCheckPermission("${spec.permissions.list}")
+    @GetMapping("/list")
+    public TableDataInfo<${className}Vo> list(${className}Bo bo, PageQuery pageQuery) {
+        return ${variableName}Service.queryPageList(bo, pageQuery);
+    }
+
+    @SaCheckPermission("${spec.permissions.export}")
+    @Log(title = "${spec.module.title}", businessType = BusinessType.EXPORT)
+    @PostMapping("/export")
+    public void export(${className}Bo bo, HttpServletResponse response) {
+        List<${className}Vo> list = ${variableName}Service.queryList(bo);
+        ExcelUtil.exportExcel(list, "${spec.module.title}", ${className}Vo.class, response);
+    }
+
+    @SaCheckPermission("${spec.permissions.list}")
+    @GetMapping("/{id}")
+    public R<${className}Vo> getInfo(@NotNull(message = "主键不能为空") @PathVariable Long id) {
+        return R.ok(${variableName}Service.queryById(id));
+    }
+
+    @SaCheckPermission("${spec.permissions.create}")
+    @Log(title = "${spec.module.title}", businessType = BusinessType.INSERT)
+    @RepeatSubmit
+    @PostMapping()
+    public R<Void> add(@Validated @RequestBody ${className}Bo bo) {
+        return toAjax(${variableName}Service.insertByBo(bo));
+    }
+
+    @SaCheckPermission("${spec.permissions.update}")
+    @Log(title = "${spec.module.title}", businessType = BusinessType.UPDATE)
+    @RepeatSubmit
+    @PutMapping()
+    public R<Void> edit(@Validated @RequestBody ${className}Bo bo) {
+        return toAjax(${variableName}Service.updateByBo(bo));
+    }
+
+    @SaCheckPermission("${spec.permissions.delete}")
+    @Log(title = "${spec.module.title}", businessType = BusinessType.DELETE)
+    @DeleteMapping("/{ids}")
+    public R<Void> remove(@NotEmpty(message = "主键不能为空") @PathVariable Long[] ids) {
+        return toAjax(${variableName}Service.deleteWithValidByIds(Arrays.asList(ids), true));
+    }
+}`;
+}
+
+function domainTemplate(spec, context) {
+  const { className, packageName } = context;
+  return `package ${packageName}.domain;
+
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import org.dromara.common.mybatis.core.domain.BaseEntity;
+
+/**
+ * ${spec.module.title}
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@TableName("${spec.module.table}")
+public class ${className} extends BaseEntity {
+
+    @TableId(value = "id")
+    private Long id;
+
+${domainFieldDeclarations(context)}
+}`;
+}
+
+function boTemplate(spec, context) {
+  const { className, packageName } = context;
+  return `package ${packageName}.domain.bo;
+
+import io.github.linpeilie.annotations.AutoMapper;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import org.dromara.common.mybatis.core.domain.BaseEntity;
+import ${packageName}.domain.${className};
+
+/**
+ * ${spec.module.title}业务对象
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@AutoMapper(target = ${className}.class, reverseConvertGenerate = false)
+public class ${className}Bo extends BaseEntity {
+
+    private Long id;
+
+${context.fieldMethods.map((field) => {
+    const validation = field.required
+      ? (field.type === 'integer'
+        ? `    @NotNull(message = "${field.title}不能为空")\n`
+        : `    @NotBlank(message = "${field.title}不能为空")\n`)
+      : '';
+    return `${validation}    private ${field.javaType} ${field.name};`;
+  }).join('\n\n')}
+}`;
+}
+
+function voTemplate(spec, context) {
+  const { className, packageName } = context;
+  return `package ${packageName}.domain.vo;
+
+import com.alibaba.excel.annotation.ExcelProperty;
+import io.github.linpeilie.annotations.AutoMapper;
+import lombok.Data;
+import ${packageName}.domain.${className};
+
+/**
+ * ${spec.module.title}视图对象
+ */
+@Data
+@AutoMapper(target = ${className}.class)
+public class ${className}Vo {
+
+    private Long id;
+
+${fieldDeclarations(context)}
+}`;
+}
+
+function mapperTemplate(spec, context) {
+  const { className, packageName } = context;
+  return `package ${packageName}.mapper;
+
+import org.dromara.common.mybatis.core.mapper.BaseMapperPlus;
+import ${packageName}.domain.${className};
+import ${packageName}.domain.vo.${className}Vo;
+
+/**
+ * ${spec.module.title}Mapper接口
+ */
+public interface ${className}Mapper extends BaseMapperPlus<${className}, ${className}Vo> {
+}`;
+}
+
+function serviceTemplate(spec, context) {
+  const { className, packageName } = context;
+  return `package ${packageName}.service;
+
+import org.dromara.common.mybatis.core.page.PageQuery;
+import org.dromara.common.mybatis.core.page.TableDataInfo;
+import ${packageName}.domain.bo.${className}Bo;
+import ${packageName}.domain.vo.${className}Vo;
+
+import java.util.Collection;
+import java.util.List;
+
+/**
+ * ${spec.module.title}Service接口
+ */
+public interface I${className}Service {
+
+    ${className}Vo queryById(Long id);
+
+    TableDataInfo<${className}Vo> queryPageList(${className}Bo bo, PageQuery pageQuery);
+
+    List<${className}Vo> queryList(${className}Bo bo);
+
+    Boolean insertByBo(${className}Bo bo);
+
+    Boolean updateByBo(${className}Bo bo);
+
+    Boolean deleteWithValidByIds(Collection<Long> ids, Boolean isValid);
+}`;
+}
+
+function serviceImplTemplate(spec, context) {
+  const { className, variableName, packageName } = context;
+  return `package ${packageName}.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import lombok.RequiredArgsConstructor;
+import org.dromara.common.core.utils.MapstructUtils;
+import org.dromara.common.mybatis.core.page.PageQuery;
+import org.dromara.common.mybatis.core.page.TableDataInfo;
+import org.springframework.stereotype.Service;
+import ${packageName}.domain.${className};
+import ${packageName}.domain.bo.${className}Bo;
+import ${packageName}.domain.vo.${className}Vo;
+import ${packageName}.mapper.${className}Mapper;
+import ${packageName}.service.I${className}Service;
+
+import java.util.Collection;
+import java.util.List;
+
+/**
+ * ${spec.module.title}Service业务层处理
+ */
+@RequiredArgsConstructor
+@Service
+public class ${className}ServiceImpl implements I${className}Service {
+
+    private final ${className}Mapper baseMapper;
+
+    @Override
+    public ${className}Vo queryById(Long id) {
+        return baseMapper.selectVoById(id);
+    }
+
+    @Override
+    public TableDataInfo<${className}Vo> queryPageList(${className}Bo bo, PageQuery pageQuery) {
+        LambdaQueryWrapper<${className}> lqw = buildQueryWrapper(bo);
+        return baseMapper.selectPageVo(pageQuery.build(), lqw);
+    }
+
+    @Override
+    public List<${className}Vo> queryList(${className}Bo bo) {
+        LambdaQueryWrapper<${className}> lqw = buildQueryWrapper(bo);
+        return baseMapper.selectVoList(lqw);
+    }
+
+    private LambdaQueryWrapper<${className}> buildQueryWrapper(${className}Bo bo) {
+        LambdaQueryWrapper<${className}> lqw = Wrappers.lambdaQuery();
+${context.fieldMethods.filter((field) => field.search).map((field) => {
+    const method = field.type === 'string' ? 'like' : 'eq';
+    return `        lqw.${method}(bo.get${field.accessorName}() != null, ${className}::get${field.accessorName}, bo.get${field.accessorName}());`;
+  }).join('\n')}
+        return lqw;
+    }
+
+    @Override
+    public Boolean insertByBo(${className}Bo bo) {
+        ${className} add = MapstructUtils.convert(bo, ${className}.class);
+        validEntityBeforeSave(add);
+        return baseMapper.insert(add) > 0;
+    }
+
+    @Override
+    public Boolean updateByBo(${className}Bo bo) {
+        ${className} update = MapstructUtils.convert(bo, ${className}.class);
+        validEntityBeforeSave(update);
+        return baseMapper.updateById(update) > 0;
+    }
+
+    private void validEntityBeforeSave(${className} entity) {
+        // Reserve extension point for generated ${variableName} validation.
+    }
+
+    @Override
+    public Boolean deleteWithValidByIds(Collection<Long> ids, Boolean isValid) {
+        if (Boolean.TRUE.equals(isValid)) {
+            // Reserve extension point for delete validation.
+        }
+        return baseMapper.deleteBatchIds(ids) > 0;
+    }
+}`;
+}
+
+function mapperXmlTemplate(spec, context) {
+  const { className, mapperNamespace } = context;
+  return `<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="${mapperNamespace}">
+
+    <resultMap type="${spec.derived.backendPackage}.domain.${className}" id="${className}Result">
+        <id property="id" column="id"/>
+${fieldResultMappings(context)}
+    </resultMap>
+
+    <sql id="select${className}Vo">
+        select id, ${fieldColumns(context)}, create_dept, create_by, create_time, update_by, update_time
+        from ${spec.module.table}
+    </sql>
+
+    <select id="select${className}List" resultMap="${className}Result">
+        <include refid="select${className}Vo"/>
+        <where>
+${fieldXmlConditions(context, 'bo')}
+        </where>
+    </select>
+</mapper>`;
+}
+
+function sqlTemplate() {
+  return `create table if not exists biz_product_plan (
+  id bigint not null comment '主键',
+  plan_code varchar(128) not null comment '套餐编码',
+  plan_name varchar(128) not null comment '套餐名称',
+  price_cents int not null comment '售价分',
+  credits int not null comment '点数',
+  status varchar(32) not null default 'enabled' comment '状态',
+  sort_order int not null default 0 comment '排序',
+  create_dept bigint default null comment '创建部门',
+  create_by bigint default null comment '创建者',
+  create_time datetime default null comment '创建时间',
+  update_by bigint default null comment '更新者',
+  update_time datetime default null comment '更新时间',
+  primary key (id),
+  unique key uk_biz_product_plan_code (plan_code)
+) engine=innodb comment='产品套餐';
+
+insert into sys_menu values('19000', '业务管理', '0', '20', 'business', null, '', 1, 0, 'M', '0', '0', '', 'component', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19001', '产品套餐', '19000', '1', 'product-plan', 'business/product-plan/index', '', 1, 0, 'C', '0', '0', 'business:productPlan:list', 'money', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19002', '产品套餐查询', '19001', '1', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:list', '#', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19003', '产品套餐新增', '19001', '2', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:add', '#', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19004', '产品套餐修改', '19001', '3', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:edit', '#', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19005', '产品套餐删除', '19001', '4', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:remove', '#', 103, 1, sysdate(), null, null, '');
+insert into sys_menu values('19006', '产品套餐导出', '19001', '5', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:export', '#', 103, 1, sysdate(), null, null, '');`;
+}
+
+function generatedFileEntries(spec, backendRoot) {
+  const context = moduleContext(spec);
+  const sourceRoot = `ruoyi-modules/${BUSINESS_ARTIFACT}/src/main/java/${context.packagePath}`;
+  const resourceRoot = `ruoyi-modules/${BUSINESS_ARTIFACT}/src/main/resources/mapper/${context.resourceSegment}`;
+  return [
+    ['ruoyi-modules/pom.xml', null],
+    ['ruoyi-admin/pom.xml', null],
+    [`ruoyi-modules/${BUSINESS_ARTIFACT}/pom.xml`, createBusinessPom()],
+    [`${sourceRoot}/controller/${context.className}Controller.java`, controllerTemplate(spec, context)],
+    [`${sourceRoot}/domain/${context.className}.java`, domainTemplate(spec, context)],
+    [`${sourceRoot}/domain/bo/${context.className}Bo.java`, boTemplate(spec, context)],
+    [`${sourceRoot}/domain/vo/${context.className}Vo.java`, voTemplate(spec, context)],
+    [`${sourceRoot}/mapper/${context.className}Mapper.java`, mapperTemplate(spec, context)],
+    [`${sourceRoot}/service/I${context.className}Service.java`, serviceTemplate(spec, context)],
+    [`${sourceRoot}/service/impl/${context.className}ServiceImpl.java`, serviceImplTemplate(spec, context)],
+    [`${resourceRoot}/${context.className}Mapper.xml`, mapperXmlTemplate(spec, context)],
+    ['script/sql/ruoyi_business_product_plan.sql', sqlTemplate()],
+    ['script/sql/biz_product_plan.sql', sqlTemplate()],
+  ].map(([relativePath, content]) => ({
+    relativePath,
+    filePath: absoluteTarget(backendRoot, relativePath),
+    content,
+    pom: relativePath.endsWith('pom.xml') && content === null,
+  }));
+}
+
+export function generateBackendModule(spec, backendRoot, options = {}) {
+  const entries = generatedFileEntries(spec, backendRoot);
+  const conflictFiles = entries
+    .filter((entry) => !entry.pom && fs.existsSync(entry.filePath))
+    .map((entry) => entry.filePath);
+
+  if (conflictFiles.length > 0 && options.force !== true) {
+    return {
+      ok: false,
+      code: 'generation_conflict',
+      files: conflictFiles,
+    };
+  }
+
+  for (const entry of entries) {
+    if (entry.relativePath === 'ruoyi-modules/pom.xml') {
+      upsertModulesPom(entry.filePath);
+    } else if (entry.relativePath === 'ruoyi-admin/pom.xml') {
+      upsertAdminPom(entry.filePath);
+    } else {
+      writeFile(entry.filePath, entry.content);
+    }
+  }
+
+  return {
+    ok: true,
+    files: entries.map((entry) => entry.filePath),
+  };
+}
