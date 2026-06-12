@@ -252,6 +252,39 @@ test('verifyModule installs frontend dependencies before build when vite is miss
   assert.equal(calls.at(-1).options.cwd, frontendRoot);
 });
 
+test('verifyModule skips frontend install and build when backend compile fails', () => {
+  const root = tempRoot();
+  const { backendRoot, frontendRoot } = generateExample(root);
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    const isBackendCompile = command === 'mvn' && args.includes('compile');
+    return {
+      command,
+      cwd: options.cwd,
+      status: isBackendCompile ? 1 : 0,
+      stdout: '',
+      stderr: isBackendCompile ? 'compile failed' : '',
+    };
+  };
+
+  const result = verifyModule(examplePath, { backendRoot, frontendRoot, runCommand: runner });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.backendCompile.ok, false);
+  assert.equal(result.frontendInstall.skipped, true);
+  assert.equal(result.frontendInstall.reason, 'backend compile failed');
+  assert.equal(result.frontendBuild.skipped, true);
+  assert.equal(result.frontendBuild.reason, 'backend compile failed');
+  assert.deepEqual(calls.map((call) => [call.command, call.args.join(' ')]), [
+    ['java', '-version'],
+    ['mvn', '-version'],
+    ['node', '--version'],
+    ['pnpm', '--version'],
+    ['mvn', '-pl ruoyi-admin -am -DskipTests compile'],
+  ]);
+});
+
 test('verifyModule skips frontend build when dependency install fails', () => {
   const root = tempRoot();
   const { backendRoot, frontendRoot } = generateExample(root);

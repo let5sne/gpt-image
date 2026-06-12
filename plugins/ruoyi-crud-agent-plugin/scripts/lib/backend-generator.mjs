@@ -170,12 +170,29 @@ function injectModulePom(content) {
   return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
 }
 
+function activeXmlContent(content) {
+  return content.replace(/<!--[\s\S]*?-->/g, '');
+}
+
+function replaceActiveXml(content, replacer) {
+  let output = '';
+  let lastIndex = 0;
+  for (const match of content.matchAll(/<!--[\s\S]*?-->/g)) {
+    output += replacer(content.slice(lastIndex, match.index));
+    output += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+  output += replacer(content.slice(lastIndex));
+  return output;
+}
+
 function adminDependencyVersion(content) {
-  if (content.includes('${revision}')) {
+  const activeContent = activeXmlContent(content);
+  if (activeContent.includes('${revision}')) {
     return '${revision}';
   }
 
-  const versionMatch = content.match(/<version>\s*([^<]+?)\s*<\/version>/);
+  const versionMatch = activeContent.match(/<version>\s*([^<]+?)\s*<\/version>/);
   return versionMatch ? versionMatch[1].trim() : '1.0.0';
 }
 
@@ -188,7 +205,7 @@ function adminDependencyXml(version = '1.0.0') {
 }
 
 function ensureAdminDependencyVersion(content, version) {
-  return content.replace(
+  return replaceActiveXml(content, (activeContent) => activeContent.replace(
     /<dependency\b[^>]*>[\s\S]*?<\/dependency>/g,
     (dependency) => {
       if (!dependency.includes('<artifactId>ruoyi-business</artifactId>')) {
@@ -199,12 +216,12 @@ function ensureAdminDependencyVersion(content, version) {
       }
       return dependency.replace('</dependency>', `      <version>${version}</version>\n    </dependency>`);
     },
-  );
+  ));
 }
 
 function injectAdminPom(content) {
   const version = adminDependencyVersion(content);
-  if (content.includes('<artifactId>ruoyi-business</artifactId>')) {
+  if (activeXmlContent(content).includes('<artifactId>ruoyi-business</artifactId>')) {
     return ensureAdminDependencyVersion(content, version);
   }
   if (content.includes('</dependencies>')) {

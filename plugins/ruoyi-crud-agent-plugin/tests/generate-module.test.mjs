@@ -38,8 +38,12 @@ function countMatches(value, pattern) {
   return value.match(pattern)?.length || 0;
 }
 
+function activeXmlContent(content) {
+  return content.replace(/<!--[\s\S]*?-->/g, '');
+}
+
 function businessDependencyBlock(content) {
-  const match = content
+  const match = activeXmlContent(content)
     .match(/<dependency\b[^>]*>[\s\S]*?<\/dependency>/g)
     ?.find((dependency) => dependency.includes('<artifactId>ruoyi-business</artifactId>'));
   assert.ok(match);
@@ -387,6 +391,45 @@ test('versioned preceding dependency does not mask versionless ruoyi-business re
   assert.ok(systemDependency.includes('<version>5.6.1</version>'));
   assert.equal(countMatches(systemDependency, /<version>/g), 1);
   assert.equal(countMatches(adminPom, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>\$\{revision\}<\/version>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>/g), 1);
+});
+
+test('commented ruoyi-business dependency does not block active admin POM insertion', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const adminPomPath = path.join(backendRoot, 'ruoyi-admin/pom.xml');
+  fs.mkdirSync(path.dirname(adminPomPath), { recursive: true });
+  const commentedDependency = `    <!--
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+    </dependency>
+    -->`;
+  fs.writeFileSync(adminPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-vue-plus</artifactId>
+    <version>\${revision}</version>
+  </parent>
+  <artifactId>ruoyi-admin</artifactId>
+  <dependencies>
+${commentedDependency}
+  </dependencies>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const adminPom = fs.readFileSync(adminPomPath, 'utf8');
+  const activeContent = activeXmlContent(adminPom);
+  const businessDependency = businessDependencyBlock(adminPom);
+
+  assert.ok(adminPom.includes(commentedDependency));
+  assert.equal(countMatches(activeContent, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
   assert.equal(countMatches(businessDependency, /<version>\$\{revision\}<\/version>/g), 1);
   assert.equal(countMatches(businessDependency, /<version>/g), 1);
 });
