@@ -539,6 +539,7 @@ function serviceImplTemplate(spec, context) {
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.utils.MapstructUtils;
 import org.dromara.common.core.utils.StringUtils;
@@ -571,7 +572,8 @@ public class ${className}ServiceImpl implements I${className}Service {
     @Override
     public TableDataInfo<${className}Vo> queryPageList(${className}Bo bo, PageQuery pageQuery) {
         LambdaQueryWrapper<${className}> lqw = buildQueryWrapper(bo);
-        return baseMapper.selectPageVo(pageQuery.build(), lqw);
+        Page<${className}Vo> result = baseMapper.selectVoPage(pageQuery.build(), lqw);
+        return TableDataInfo.build(result);
     }
 
     @Override

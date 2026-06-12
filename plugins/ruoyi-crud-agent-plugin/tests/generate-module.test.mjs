@@ -76,8 +76,12 @@ test('generator writes product plan backend and frontend files', () => {
   assert.ok(controller.includes('@GetMapping("/list")'));
 
   const serviceImpl = fs.readFileSync(backend.files.find((file) => file.endsWith('ProductPlanServiceImpl.java')), 'utf8');
+  assert.ok(serviceImpl.includes('import com.baomidou.mybatisplus.extension.plugins.pagination.Page;'));
   assert.ok(serviceImpl.includes('StringUtils.isNotBlank(bo.getPlanCode())'));
   assert.ok(serviceImpl.includes('StringUtils.isNotBlank(bo.getStatus())'));
+  assert.ok(serviceImpl.includes('Page<ProductPlanVo> result = baseMapper.selectVoPage(pageQuery.build(), lqw);'));
+  assert.ok(serviceImpl.includes('return TableDataInfo.build(result);'));
+  assert.doesNotMatch(serviceImpl, /selectPageVo/);
   assert.doesNotMatch(serviceImpl, /bo\.getStatus\(\) != null, ProductPlan::getStatus/);
 
   const vo = fs.readFileSync(backend.files.find((file) => file.endsWith('ProductPlanVo.java')), 'utf8');
