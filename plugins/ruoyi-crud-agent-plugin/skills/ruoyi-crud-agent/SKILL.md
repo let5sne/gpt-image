@@ -14,8 +14,8 @@ Use this skill when the user asks to generate, verify, or publish a RuoYi-Vue-Pl
 - Use `npm run init:sandbox` to prepare fixed RuoYi-Vue-Plus and plus-ui versions from the plugin lock files.
 - Run `npm run generate` only after validation succeeds.
 - Run `npm run verify` after generation.
-- Run `npm run report` after verification.
-- Treat command output and generated reports as the source of truth.
+- Run `npm run report` after verification to write summary artifacts.
+- Treat `npm run verify` exit status and output as the verification source of truth; report artifacts summarize the run and do not replace verification evidence.
 - Do not migrate existing application business logic without a separate integration spec.
 - `npm run verify` may fail with structured JSON when environment or sandbox prerequisites are missing.
 
@@ -39,4 +39,4 @@ npm run report
 - `generation_conflict`: stop before overwriting generated targets, report the conflicting paths, and ask whether to clean or choose a new module name.
 - `backend_verify_failed`: report backend compile or CRUD smoke failures from the verifier output and keep the report status failed.
 - `frontend_verify_failed`: report plus-ui build, route, or form-field failures from the verifier output and keep the report status failed.
-- `report_failed`: preserve verification output, report that the final report artifact was not produced, and do not substitute a hand-written success summary.
+- `report_failed`: preserve verification output, report that the summary artifact was not produced, and do not substitute a hand-written success summary for verifier evidence.

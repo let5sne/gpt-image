@@ -19,9 +19,10 @@ npm run report
 
 - Confirm `.codex-plugin/plugin.json` version matches `package.json`.
 - Confirm sandbox dependency references are immutable in `fixtures/versions.lock`.
-- Confirm the latest golden path produced `reports/ruoyi-crud-agent-report.md` and `reports/ruoyi-crud-agent-report.json`.
-- Confirm `README.md` states Phase 1 does not migrate production application logic.
+- Confirm the latest golden path has a passing `npm run verify` exit status and verifier output.
+- Confirm the latest golden path produced summary artifacts at `reports/ruoyi-crud-agent-report.md` and `reports/ruoyi-crud-agent-report.json`.
+- Confirm `README.md` documents that the MVP does not migrate existing production business logic or current app APIs.
 - Confirm `skills/ruoyi-crud-agent/SKILL.md` is present and matches the manifest skill path.
 - Confirm `docs/spec-format.md` documents the current schema and sample spec pointer.
 
-Publish only after command output and generated report artifacts agree on the release state.
+Publish only after `npm run verify` passes. Treat report artifacts as summaries after verification, not as substitutes for verifier evidence.
