@@ -86,6 +86,24 @@ export function validateSemanticSpec(spec) {
     }
     seenFieldNames.add(field.name);
 
+    if (Object.hasOwn(field, 'default')) {
+      if (field.type === 'string' && typeof field.default !== 'string') {
+        errors.push({
+          instancePath: `/fields/${index}/default`,
+          message: `string default must be a string: ${field.name}`,
+          keyword: 'invalidDefaultType',
+        });
+      }
+
+      if (field.type === 'integer' && typeof field.default !== 'number') {
+        errors.push({
+          instancePath: `/fields/${index}/default`,
+          message: `integer default must be an integer: ${field.name}`,
+          keyword: 'invalidDefaultType',
+        });
+      }
+    }
+
     if (field.type === 'enum' && Object.hasOwn(field, 'default')) {
       const hasStringDefault = typeof field.default === 'string';
       const includesDefault = Array.isArray(field.options) && field.options.includes(field.default);

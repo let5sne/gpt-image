@@ -90,6 +90,28 @@ test('wrong-type enum defaults are semantic validation errors', () => {
   )));
 });
 
+test('string field integer defaults are semantic validation errors', () => {
+  const content = fs.readFileSync(examplePath, 'utf8')
+    .replace('    search: true\n  - name: planName', '    search: true\n    default: 1\n  - name: planName');
+  const result = loadAndValidateSpec(writeTempSpec(content));
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((item) => (
+    item.instancePath === '/fields/0/default' && item.keyword === 'invalidDefaultType'
+  )));
+});
+
+test('integer field string defaults are semantic validation errors', () => {
+  const content = fs.readFileSync(examplePath, 'utf8')
+    .replace('    min: 0\n    list: true', '    min: 0\n    default: free\n    list: true');
+  const result = loadAndValidateSpec(writeTempSpec(content));
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((item) => (
+    item.instancePath === '/fields/2/default' && item.keyword === 'invalidDefaultType'
+  )));
+});
+
 test('validate-spec CLI prints valid spec summary to stdout', () => {
   const result = runValidateCli(['examples/product-plan.yaml']);
   const output = JSON.parse(result.stdout);

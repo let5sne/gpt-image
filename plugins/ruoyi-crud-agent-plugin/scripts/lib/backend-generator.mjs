@@ -40,6 +40,14 @@ function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+function stableMenuBaseId(value) {
+  let hash = 0;
+  for (const char of value) {
+    hash = ((hash * 31) + char.charCodeAt(0)) % 7000;
+  }
+  return 20000 + (hash * 10);
+}
+
 function moduleContext(spec) {
   const className = spec.derived.className;
   const packageName = spec.derived.backendPackage;
@@ -591,7 +599,6 @@ insert into sys_menu values('19006', '产品套餐导出', '19001', '5', '#', ''
 
 function genericSqlTemplate(spec, context) {
   const fieldRows = context.fieldMethods.map((field) => {
-    const required = field.required ? 'not null' : 'default null';
     const defaultClause = Object.hasOwn(field, 'default')
       ? ` default ${field.type === 'integer' ? field.default : sqlString(field.default)}`
       : '';
@@ -601,6 +608,20 @@ function genericSqlTemplate(spec, context) {
     .filter((field) => field.unique)
     .map((field) => `  unique key uk_${spec.module.table}_${field.columnName} (${field.columnName})`);
   const keyRows = ['  primary key (id)', ...uniqueKeys].join(',\n');
+  const baseId = stableMenuBaseId(spec.module.name);
+  const [rootPath, ...childParts] = spec.module.menuPath.split('/');
+  const routePath = childParts.at(-1) || rootPath;
+  const componentPath = `${spec.module.menuPath}/index`;
+  const parentTitle = rootPath === 'business' ? '业务管理' : rootPath;
+  const menuRows = [
+    `insert into sys_menu values('${baseId}', ${sqlString(parentTitle)}, '0', '20', ${sqlString(rootPath)}, null, '', 1, 0, 'M', '0', '0', '', 'component', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 1}', ${sqlString(spec.module.title)}, '${baseId}', '1', ${sqlString(routePath)}, ${sqlString(componentPath)}, '', 1, 0, 'C', '0', '0', ${sqlString(spec.permissions.list)}, 'list', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 2}', ${sqlString(`${spec.module.title}查询`)}, '${baseId + 1}', '1', '#', '', '', 1, 0, 'F', '0', '0', ${sqlString(spec.permissions.list)}, '#', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 3}', ${sqlString(`${spec.module.title}新增`)}, '${baseId + 1}', '2', '#', '', '', 1, 0, 'F', '0', '0', ${sqlString(spec.permissions.create)}, '#', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 4}', ${sqlString(`${spec.module.title}修改`)}, '${baseId + 1}', '3', '#', '', '', 1, 0, 'F', '0', '0', ${sqlString(spec.permissions.update)}, '#', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 5}', ${sqlString(`${spec.module.title}删除`)}, '${baseId + 1}', '4', '#', '', '', 1, 0, 'F', '0', '0', ${sqlString(spec.permissions.delete)}, '#', 103, 1, sysdate(), null, null, '');`,
+    `insert into sys_menu values('${baseId + 6}', ${sqlString(`${spec.module.title}导出`)}, '${baseId + 1}', '5', '#', '', '', 1, 0, 'F', '0', '0', ${sqlString(spec.permissions.export)}, '#', 103, 1, sysdate(), null, null, '');`,
+  ];
 
   return `create table if not exists ${spec.module.table} (
   id bigint not null comment '主键',
@@ -611,7 +632,9 @@ ${fieldRows.join('\n')}
   update_by bigint default null comment '更新者',
   update_time datetime default null comment '更新时间',
 ${keyRows}
-) engine=innodb comment=${sqlString(spec.module.title)};`;
+) engine=innodb comment=${sqlString(spec.module.title)};
+
+${menuRows.join('\n')}`;
 }
 
 function sqlTemplate(spec, context) {
