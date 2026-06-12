@@ -1,0 +1,11 @@
+{
+  "id": "ruoyi-crud-agent",
+  "name": "RuoYi CRUD Agent",
+  "version": "0.1.0",
+  "description": "Generate and verify RuoYi-Vue-Plus plus-ui CRUD modules from structured specs.",
+  "skills": [
+    {
+      "path": "./skills/ruoyi-crud-agent"
+    }
+  ]
+}

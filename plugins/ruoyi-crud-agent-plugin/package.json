@@ -1,0 +1,21 @@
+{
+  "name": "ruoyi-crud-agent-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Codex plugin MVP for generating and verifying RuoYi CRUD modules.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "validate": "node scripts/validate-spec.mjs examples/product-plan.yaml",
+    "init:sandbox": "node scripts/init-sandbox.mjs",
+    "check:upstream": "node scripts/check-upstream.mjs",
+    "generate": "node scripts/generate-module.mjs examples/product-plan.yaml",
+    "verify": "node scripts/verify-module.mjs examples/product-plan.yaml",
+    "report": "node scripts/report.mjs examples/product-plan.yaml"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {}
+}
