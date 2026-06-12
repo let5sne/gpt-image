@@ -1,0 +1,34 @@
+module:
+  name: productPlan
+  title: 产品套餐
+  package: org.dromara.business.product
+  table: biz_product_plan
+  menuPath: business/product-plan
+fields:
+  - name: PlanCode
+    title: 套餐编码
+    type: string
+    required: true
+    unique: true
+    list: true
+    form: true
+    search: true
+permissions:
+  menu: business:productPlan
+  list: business:productPlan:list
+  create: business:productPlan:add
+  update: business:productPlan:edit
+  delete: business:productPlan:remove
+  export: business:productPlan:export
+acceptance:
+  backend:
+    compile: true
+    smokeCrud: true
+  frontend:
+    build: true
+    routeVisible: true
+    formFields:
+      - planCode
+  report:
+    format:
+      - markdown

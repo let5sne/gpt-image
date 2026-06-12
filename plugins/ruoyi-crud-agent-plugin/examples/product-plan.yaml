@@ -1,0 +1,78 @@
+module:
+  name: productPlan
+  title: 产品套餐
+  package: org.dromara.business.product
+  table: biz_product_plan
+  menuPath: business/product-plan
+fields:
+  - name: planCode
+    title: 套餐编码
+    type: string
+    required: true
+    unique: true
+    list: true
+    form: true
+    search: true
+  - name: planName
+    title: 套餐名称
+    type: string
+    required: true
+    list: true
+    form: true
+    search: true
+  - name: priceCents
+    title: 价格分
+    type: integer
+    required: true
+    min: 0
+    list: true
+    form: true
+  - name: credits
+    title: 积分数
+    type: integer
+    required: true
+    min: 0
+    list: true
+    form: true
+  - name: status
+    title: 状态
+    type: enum
+    required: true
+    options:
+      - enabled
+      - disabled
+    default: enabled
+    list: true
+    form: true
+    search: true
+  - name: sortOrder
+    title: 排序
+    type: integer
+    default: 0
+    list: true
+    form: true
+permissions:
+  menu: business:productPlan
+  list: business:productPlan:list
+  create: business:productPlan:add
+  update: business:productPlan:edit
+  delete: business:productPlan:remove
+  export: business:productPlan:export
+acceptance:
+  backend:
+    compile: true
+    smokeCrud: true
+  frontend:
+    build: true
+    routeVisible: true
+    formFields:
+      - planCode
+      - planName
+      - priceCents
+      - credits
+      - status
+      - sortOrder
+  report:
+    format:
+      - markdown
+      - json
