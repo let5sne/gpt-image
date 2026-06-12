@@ -1,0 +1,14 @@
+ruoyiVuePlus:
+  repo: https://github.com/dromara/RuoYi-Vue-Plus.git
+  tag: v5.6.1
+  ref: 6bfdcae06eaf218c4204382de277499be6c88c1b
+plusUi:
+  repo: https://github.com/CrazyLionCat/plus-ui.git
+  tag: v5.6.1-v2.6.1
+  ref: 9fd2b6f137298ad3511ffd1816bea60d69c795ce
+java:
+  version: "17"
+node:
+  version: ">=20.19.0"
+packageManager:
+  frontend: pnpm
