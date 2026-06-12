@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadAndValidateSpec } from './lib/spec-loader.mjs';
+import { loadAndValidateSpec, SpecInputError } from './lib/spec-loader.mjs';
 
 const specPath = process.argv[2];
 
@@ -12,7 +12,28 @@ if (!specPath) {
   process.exit(2);
 }
 
-const result = loadAndValidateSpec(specPath);
+let result;
+
+try {
+  result = loadAndValidateSpec(specPath);
+} catch (error) {
+  if (error instanceof SpecInputError) {
+    console.error(JSON.stringify({
+      ok: false,
+      code: error.code,
+      message: error.message,
+      errors: error.errors,
+    }));
+    process.exit(1);
+  }
+
+  console.error(JSON.stringify({
+    ok: false,
+    code: 'internal_error',
+    message: error.message,
+  }));
+  process.exit(1);
+}
 
 if (!result.valid) {
   console.error(JSON.stringify({

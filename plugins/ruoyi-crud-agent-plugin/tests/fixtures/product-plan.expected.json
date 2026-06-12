@@ -1,9 +1,10 @@
 {
-  "moduleName": "productPlan",
   "className": "ProductPlan",
+  "variableName": "productPlan",
   "tableName": "biz_product_plan",
   "apiBase": "/business/productPlan",
   "backendPackage": "org.dromara.business.product",
+  "backendPackagePath": "org/dromara/business/product",
   "frontendApiDir": "src/api/business/product-plan",
   "frontendViewDir": "src/views/business/product-plan"
 }

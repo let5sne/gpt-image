@@ -8,20 +8,47 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 export const pluginRoot = path.resolve(currentDir, '../..');
 export const schemaPath = path.join(pluginRoot, 'schemas/crud-spec.schema.json');
 
+export class SpecInputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'SpecInputError';
+    this.code = code;
+    this.errors = [{ instancePath: '', message, keyword: code }];
+  }
+}
+
 export function readStructuredFile(filePath) {
   const absolutePath = path.resolve(filePath);
   const extension = path.extname(absolutePath).toLowerCase();
-  const content = fs.readFileSync(absolutePath, 'utf8');
+
+  if (!['.json', '.yaml', '.yml'].includes(extension)) {
+    throw new SpecInputError('unsupported_extension', `unsupported spec extension: ${extension || '(none)'}`);
+  }
+
+  let content;
+  try {
+    content = fs.readFileSync(absolutePath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new SpecInputError('file_not_found', `spec file not found: ${absolutePath}`);
+    }
+
+    throw new SpecInputError('file_read_error', `failed to read spec file: ${absolutePath}`);
+  }
 
   if (extension === '.json') {
-    return JSON.parse(content);
+    try {
+      return JSON.parse(content);
+    } catch (error) {
+      throw new SpecInputError('invalid_json', `failed to parse JSON spec: ${error.message}`);
+    }
   }
 
-  if (extension === '.yaml' || extension === '.yml') {
+  try {
     return YAML.parse(content);
+  } catch (error) {
+    throw new SpecInputError('invalid_yaml', `failed to parse YAML spec: ${error.message}`);
   }
-
-  throw new Error(`unsupported spec extension: ${extension}`);
 }
 
 export function normalizeSpec(spec) {
@@ -45,6 +72,48 @@ export function normalizeSpec(spec) {
   };
 }
 
+export function validateSemanticSpec(spec) {
+  const errors = [];
+  const seenFieldNames = new Set();
+
+  spec.fields.forEach((field, index) => {
+    if (seenFieldNames.has(field.name)) {
+      errors.push({
+        instancePath: `/fields/${index}/name`,
+        message: `duplicate field name: ${field.name}`,
+        keyword: 'duplicateField',
+      });
+    }
+    seenFieldNames.add(field.name);
+
+    if (field.type === 'enum' && Object.hasOwn(field, 'default')) {
+      const hasStringDefault = typeof field.default === 'string';
+      const includesDefault = Array.isArray(field.options) && field.options.includes(field.default);
+
+      if (!hasStringDefault || !includesDefault) {
+        errors.push({
+          instancePath: `/fields/${index}/default`,
+          message: `enum default must be one of options: ${field.name}`,
+          keyword: 'invalidEnumDefault',
+        });
+      }
+    }
+  });
+
+  const fieldNames = new Set(spec.fields.map((field) => field.name));
+  spec.acceptance.frontend.formFields.forEach((fieldName, index) => {
+    if (!fieldNames.has(fieldName)) {
+      errors.push({
+        instancePath: `/acceptance/frontend/formFields/${index}`,
+        message: `unknown form field: ${fieldName}`,
+        keyword: 'unknownFormField',
+      });
+    }
+  });
+
+  return errors;
+}
+
 export function loadAndValidateSpec(filePath) {
   const schema = readStructuredFile(schemaPath);
   const spec = readStructuredFile(filePath);
@@ -52,9 +121,27 @@ export function loadAndValidateSpec(filePath) {
   const validate = ajv.compile(schema);
   const valid = validate(spec);
 
+  if (!valid) {
+    return {
+      valid: false,
+      spec,
+      errors: validate.errors || [],
+    };
+  }
+
+  const semanticErrors = validateSemanticSpec(spec);
+
+  if (semanticErrors.length > 0) {
+    return {
+      valid: false,
+      spec,
+      errors: semanticErrors,
+    };
+  }
+
   return {
-    valid,
-    spec: valid ? normalizeSpec(spec) : spec,
-    errors: validate.errors || [],
+    valid: true,
+    spec: normalizeSpec(spec),
+    errors: [],
   };
 }
