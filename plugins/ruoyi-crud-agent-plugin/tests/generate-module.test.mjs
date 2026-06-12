@@ -80,6 +80,10 @@ test('generator writes product plan backend and frontend files', () => {
   assert.ok(serviceImpl.includes('StringUtils.isNotBlank(bo.getStatus())'));
   assert.doesNotMatch(serviceImpl, /bo\.getStatus\(\) != null, ProductPlan::getStatus/);
 
+  const vo = fs.readFileSync(backend.files.find((file) => file.endsWith('ProductPlanVo.java')), 'utf8');
+  assert.ok(vo.includes('import cn.idev.excel.annotation.ExcelProperty;'));
+  assert.doesNotMatch(vo, /import com\.alibaba\.excel\.annotation\.ExcelProperty;/);
+
   const sql = fs.readFileSync(backend.files.find((file) => file.endsWith('ruoyi_business_product_plan.sql')), 'utf8');
   assert.ok(sql.includes("create table if not exists biz_product_plan (\n  id bigint not null comment '主键',"));
   assert.ok(sql.includes("insert into sys_menu values('19006', '产品套餐导出'"));
