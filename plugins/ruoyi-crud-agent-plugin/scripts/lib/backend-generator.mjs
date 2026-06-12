@@ -189,8 +189,11 @@ function adminDependencyXml(version = '1.0.0') {
 
 function ensureAdminDependencyVersion(content, version) {
   return content.replace(
-    /<dependency>[\s\S]*?<artifactId>ruoyi-business<\/artifactId>[\s\S]*?<\/dependency>/g,
+    /<dependency\b[^>]*>[\s\S]*?<\/dependency>/g,
     (dependency) => {
+      if (!dependency.includes('<artifactId>ruoyi-business</artifactId>')) {
+        return dependency;
+      }
       if (dependency.includes('<version>')) {
         return dependency;
       }

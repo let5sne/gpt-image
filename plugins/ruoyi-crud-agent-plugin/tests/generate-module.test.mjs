@@ -39,9 +39,11 @@ function countMatches(value, pattern) {
 }
 
 function businessDependencyBlock(content) {
-  const match = content.match(/<dependency>[\s\S]*?<artifactId>ruoyi-business<\/artifactId>[\s\S]*?<\/dependency>/);
+  const match = content
+    .match(/<dependency\b[^>]*>[\s\S]*?<\/dependency>/g)
+    ?.find((dependency) => dependency.includes('<artifactId>ruoyi-business</artifactId>'));
   assert.ok(match);
-  return match[0];
+  return match;
 }
 
 test('generator writes product plan backend and frontend files', () => {
@@ -343,6 +345,50 @@ test('existing versionless ruoyi-admin business dependency is repaired idempoten
   const dependency = businessDependencyBlock(adminPom);
   assert.equal(countMatches(adminPom, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
   assert.equal(countMatches(dependency, /<version>\$\{revision\}<\/version>/g), 1);
+});
+
+test('versioned preceding dependency does not mask versionless ruoyi-business repair', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const adminPomPath = path.join(backendRoot, 'ruoyi-admin/pom.xml');
+  fs.mkdirSync(path.dirname(adminPomPath), { recursive: true });
+  fs.writeFileSync(adminPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-vue-plus</artifactId>
+    <version>\${revision}</version>
+  </parent>
+  <artifactId>ruoyi-admin</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-system</artifactId>
+      <version>5.6.1</version>
+    </dependency>
+    <!-- preceding dependency has a version; business still needs revision -->
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+    </dependency>
+  </dependencies>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const adminPom = fs.readFileSync(adminPomPath, 'utf8');
+  const dependencies = adminPom.match(/<dependency\b[^>]*>[\s\S]*?<\/dependency>/g) || [];
+  const systemDependency = dependencies.find((dependency) => dependency.includes('<artifactId>ruoyi-system</artifactId>'));
+  const businessDependency = businessDependencyBlock(adminPom);
+
+  assert.ok(systemDependency.includes('<version>5.6.1</version>'));
+  assert.equal(countMatches(systemDependency, /<version>/g), 1);
+  assert.equal(countMatches(adminPom, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>\$\{revision\}<\/version>/g), 1);
+  assert.equal(countMatches(businessDependency, /<version>/g), 1);
 });
 
 test('force overwrites generated files and POM updates stay idempotent', () => {
