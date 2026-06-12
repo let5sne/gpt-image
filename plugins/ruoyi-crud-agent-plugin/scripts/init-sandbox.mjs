@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runCommand } from './lib/command.mjs';
 import { loadVersionLock, sandboxRoot } from './lib/version-lock.mjs';
-
-const dryRun = process.argv.includes('--dry-run');
 
 function commandSummary(result, args) {
   return {
@@ -16,17 +15,47 @@ function commandSummary(result, args) {
   };
 }
 
-export function clonePinned(name, source, target) {
-  if (fs.existsSync(target)) {
+export function inspectExistingCheckout(name, source, target) {
+  const args = ['rev-parse', '--verify', 'HEAD'];
+  const result = runCommand('git', args, { cwd: target });
+
+  if (result.status !== 0) {
     return {
-      ok: true,
+      ok: false,
+      code: 'sandbox_invalid_checkout',
       name,
       target,
-      skipped: true,
+      expectedRef: source.ref,
     };
   }
 
-  if (dryRun) {
+  const actualRef = result.stdout.trim();
+  if (actualRef !== source.ref) {
+    return {
+      ok: false,
+      code: 'sandbox_invalid_checkout',
+      name,
+      target,
+      expectedRef: source.ref,
+      actualRef,
+    };
+  }
+
+  return {
+    ok: true,
+    name,
+    target,
+    skipped: true,
+    actualRef,
+  };
+}
+
+export function clonePinned(name, source, target, options = {}) {
+  if (fs.existsSync(target)) {
+    return inspectExistingCheckout(name, source, target);
+  }
+
+  if (options.dryRun) {
     return {
       ok: true,
       name,
@@ -80,14 +109,21 @@ export function clonePinned(name, source, target) {
   };
 }
 
-const lock = loadVersionLock();
-const backend = clonePinned('backend', lock.ruoyiVuePlus, path.join(sandboxRoot, 'backend'));
-const frontend = clonePinned('frontend', lock.plusUi, path.join(sandboxRoot, 'frontend'));
-const output = {
-  ok: backend.ok && frontend.ok,
-  backend,
-  frontend,
-};
+export function initSandbox(options = {}) {
+  const lock = loadVersionLock();
+  const backend = clonePinned('backend', lock.ruoyiVuePlus, path.join(sandboxRoot, 'backend'), options);
+  const frontend = clonePinned('frontend', lock.plusUi, path.join(sandboxRoot, 'frontend'), options);
 
-console.log(JSON.stringify(output, null, 2));
-process.exit(output.ok ? 0 : 1);
+  return {
+    ok: backend.ok && frontend.ok,
+    backend,
+    frontend,
+  };
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  const output = initSandbox({ dryRun: process.argv.includes('--dry-run') });
+
+  console.log(JSON.stringify(output, null, 2));
+  process.exit(output.ok ? 0 : 1);
+}
