@@ -23,39 +23,45 @@ function toSnakeCase(value) {
   return value.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
 }
 
+function writeFile(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${content.trimEnd()}\n`);
+}
+
+function javaString(value) {
+  return JSON.stringify(String(value));
+}
+
+function javaComment(value) {
+  return String(value).replaceAll('*/', '* /');
+}
+
+function sqlString(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 function moduleContext(spec) {
   const className = spec.derived.className;
-  const variableName = spec.derived.variableName;
   const packageName = spec.derived.backendPackage;
   const packagePath = spec.derived.backendPackagePath;
-  const mapperNamespace = `${packageName}.mapper.${className}Mapper`;
   const resourceSegment = packageName.split('.').at(-1);
-  const fields = spec.fields;
 
   return {
     className,
-    variableName,
+    variableName: spec.derived.variableName,
     packageName,
     packagePath,
-    mapperNamespace,
+    mapperNamespace: `${packageName}.mapper.${className}Mapper`,
     resourceSegment,
-    fields,
-    fieldMethods: fields.map((field) => ({
+    sqlFileName: `ruoyi_business_${toSnakeCase(spec.module.name)}.sql`,
+    fieldMethods: spec.fields.map((field) => ({
       ...field,
       javaType: javaTypeBySpecType[field.type],
+      sqlType: sqlTypeBySpecType[field.type],
       columnName: toSnakeCase(field.name),
       accessorName: upperFirst(field.name),
     })),
   };
-}
-
-function absoluteTarget(root, relativePath) {
-  return path.resolve(root, relativePath);
-}
-
-function writeFile(filePath, content) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${content.trimEnd()}\n`);
 }
 
 function createMinimalModulesPom() {
@@ -153,10 +159,7 @@ function injectModulePom(content) {
   if (content.includes('</modules>')) {
     return content.replace('</modules>', '    <module>ruoyi-business</module>\n  </modules>');
   }
-  if (content.includes('</project>')) {
-    return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
-  }
-  return content;
+  return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
 }
 
 function adminDependencyXml(includeVersion = false) {
@@ -174,10 +177,7 @@ function injectAdminPom(content) {
   if (content.includes('</dependencies>')) {
     return content.replace('</dependencies>', `${adminDependencyXml()}\n  </dependencies>`);
   }
-  if (content.includes('</project>')) {
-    return content.replace('</project>', `  <dependencies>\n${adminDependencyXml()}\n  </dependencies>\n</project>`);
-  }
-  return content;
+  return content.replace('</project>', `  <dependencies>\n${adminDependencyXml()}\n  </dependencies>\n</project>`);
 }
 
 function upsertModulesPom(filePath) {
@@ -185,8 +185,7 @@ function upsertModulesPom(filePath) {
     writeFile(filePath, createMinimalModulesPom());
     return;
   }
-  const next = injectModulePom(fs.readFileSync(filePath, 'utf8'));
-  fs.writeFileSync(filePath, next);
+  fs.writeFileSync(filePath, injectModulePom(fs.readFileSync(filePath, 'utf8')));
 }
 
 function upsertAdminPom(filePath) {
@@ -194,21 +193,20 @@ function upsertAdminPom(filePath) {
     writeFile(filePath, createMinimalAdminPom());
     return;
   }
-  const next = injectAdminPom(fs.readFileSync(filePath, 'utf8'));
-  fs.writeFileSync(filePath, next);
+  fs.writeFileSync(filePath, injectAdminPom(fs.readFileSync(filePath, 'utf8')));
 }
 
-function fieldDeclarations(context) {
+function excelFieldDeclarations(context) {
   return context.fieldMethods.map((field) => `    /**
-     * ${field.title}
+     * ${javaComment(field.title)}
      */
-    @ExcelProperty(value = "${field.title}")
+    @ExcelProperty(value = ${javaString(field.title)})
     private ${field.javaType} ${field.name};`).join('\n\n');
 }
 
 function domainFieldDeclarations(context) {
   return context.fieldMethods.map((field) => `    /**
-     * ${field.title}
+     * ${javaComment(field.title)}
      */
     private ${field.javaType} ${field.name};`).join('\n\n');
 }
@@ -228,6 +226,17 @@ function fieldXmlConditions(context, prefix) {
     }
     return `            <if test="${prefix}.${field.name} != null">and ${field.columnName} = #{${prefix}.${field.name}}</if>`;
   }).join('\n');
+}
+
+function queryCondition(field, className) {
+  const getter = `bo.get${field.accessorName}()`;
+  if (field.type === 'string') {
+    return `        lqw.like(StringUtils.isNotBlank(${getter}), ${className}::get${field.accessorName}, ${getter});`;
+  }
+  if (field.type === 'enum') {
+    return `        lqw.eq(StringUtils.isNotBlank(${getter}), ${className}::get${field.accessorName}, ${getter});`;
+  }
+  return `        lqw.eq(${getter} != null, ${className}::get${field.accessorName}, ${getter});`;
 }
 
 function controllerTemplate(spec, context) {
@@ -264,54 +273,54 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * ${spec.module.title}
+ * ${javaComment(spec.module.title)}
  */
 @Validated
 @RequiredArgsConstructor
 @RestController
-@RequestMapping("${spec.derived.apiBase}")
+@RequestMapping(${javaString(spec.derived.apiBase)})
 public class ${className}Controller extends BaseController {
 
     private final I${className}Service ${variableName}Service;
 
-    @SaCheckPermission("${spec.permissions.list}")
+    @SaCheckPermission(${javaString(spec.permissions.list)})
     @GetMapping("/list")
     public TableDataInfo<${className}Vo> list(${className}Bo bo, PageQuery pageQuery) {
         return ${variableName}Service.queryPageList(bo, pageQuery);
     }
 
-    @SaCheckPermission("${spec.permissions.export}")
-    @Log(title = "${spec.module.title}", businessType = BusinessType.EXPORT)
+    @SaCheckPermission(${javaString(spec.permissions.export)})
+    @Log(title = ${javaString(spec.module.title)}, businessType = BusinessType.EXPORT)
     @PostMapping("/export")
     public void export(${className}Bo bo, HttpServletResponse response) {
         List<${className}Vo> list = ${variableName}Service.queryList(bo);
-        ExcelUtil.exportExcel(list, "${spec.module.title}", ${className}Vo.class, response);
+        ExcelUtil.exportExcel(list, ${javaString(spec.module.title)}, ${className}Vo.class, response);
     }
 
-    @SaCheckPermission("${spec.permissions.list}")
+    @SaCheckPermission(${javaString(spec.permissions.list)})
     @GetMapping("/{id}")
     public R<${className}Vo> getInfo(@NotNull(message = "主键不能为空") @PathVariable Long id) {
         return R.ok(${variableName}Service.queryById(id));
     }
 
-    @SaCheckPermission("${spec.permissions.create}")
-    @Log(title = "${spec.module.title}", businessType = BusinessType.INSERT)
+    @SaCheckPermission(${javaString(spec.permissions.create)})
+    @Log(title = ${javaString(spec.module.title)}, businessType = BusinessType.INSERT)
     @RepeatSubmit
     @PostMapping()
     public R<Void> add(@Validated @RequestBody ${className}Bo bo) {
         return toAjax(${variableName}Service.insertByBo(bo));
     }
 
-    @SaCheckPermission("${spec.permissions.update}")
-    @Log(title = "${spec.module.title}", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(${javaString(spec.permissions.update)})
+    @Log(title = ${javaString(spec.module.title)}, businessType = BusinessType.UPDATE)
     @RepeatSubmit
     @PutMapping()
     public R<Void> edit(@Validated @RequestBody ${className}Bo bo) {
         return toAjax(${variableName}Service.updateByBo(bo));
     }
 
-    @SaCheckPermission("${spec.permissions.delete}")
-    @Log(title = "${spec.module.title}", businessType = BusinessType.DELETE)
+    @SaCheckPermission(${javaString(spec.permissions.delete)})
+    @Log(title = ${javaString(spec.module.title)}, businessType = BusinessType.DELETE)
     @DeleteMapping("/{ids}")
     public R<Void> remove(@NotEmpty(message = "主键不能为空") @PathVariable Long[] ids) {
         return toAjax(${variableName}Service.deleteWithValidByIds(Arrays.asList(ids), true));
@@ -330,11 +339,11 @@ import lombok.EqualsAndHashCode;
 import org.dromara.common.mybatis.core.domain.BaseEntity;
 
 /**
- * ${spec.module.title}
+ * ${javaComment(spec.module.title)}
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("${spec.module.table}")
+@TableName(${javaString(spec.module.table)})
 public class ${className} extends BaseEntity {
 
     @TableId(value = "id")
@@ -357,7 +366,7 @@ import org.dromara.common.mybatis.core.domain.BaseEntity;
 import ${packageName}.domain.${className};
 
 /**
- * ${spec.module.title}业务对象
+ * ${javaComment(spec.module.title)}业务对象
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -369,8 +378,8 @@ public class ${className}Bo extends BaseEntity {
 ${context.fieldMethods.map((field) => {
     const validation = field.required
       ? (field.type === 'integer'
-        ? `    @NotNull(message = "${field.title}不能为空")\n`
-        : `    @NotBlank(message = "${field.title}不能为空")\n`)
+        ? `    @NotNull(message = ${javaString(`${field.title}不能为空`)})\n`
+        : `    @NotBlank(message = ${javaString(`${field.title}不能为空`)})\n`)
       : '';
     return `${validation}    private ${field.javaType} ${field.name};`;
   }).join('\n\n')}
@@ -387,7 +396,7 @@ import lombok.Data;
 import ${packageName}.domain.${className};
 
 /**
- * ${spec.module.title}视图对象
+ * ${javaComment(spec.module.title)}视图对象
  */
 @Data
 @AutoMapper(target = ${className}.class)
@@ -395,7 +404,7 @@ public class ${className}Vo {
 
     private Long id;
 
-${fieldDeclarations(context)}
+${excelFieldDeclarations(context)}
 }`;
 }
 
@@ -408,7 +417,7 @@ import ${packageName}.domain.${className};
 import ${packageName}.domain.vo.${className}Vo;
 
 /**
- * ${spec.module.title}Mapper接口
+ * ${javaComment(spec.module.title)}Mapper接口
  */
 public interface ${className}Mapper extends BaseMapperPlus<${className}, ${className}Vo> {
 }`;
@@ -427,7 +436,7 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * ${spec.module.title}Service接口
+ * ${javaComment(spec.module.title)}Service接口
  */
 public interface I${className}Service {
 
@@ -453,6 +462,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.utils.MapstructUtils;
+import org.dromara.common.core.utils.StringUtils;
 import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.mybatis.core.page.TableDataInfo;
 import org.springframework.stereotype.Service;
@@ -466,7 +476,7 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * ${spec.module.title}Service业务层处理
+ * ${javaComment(spec.module.title)}Service业务层处理
  */
 @RequiredArgsConstructor
 @Service
@@ -493,10 +503,7 @@ public class ${className}ServiceImpl implements I${className}Service {
 
     private LambdaQueryWrapper<${className}> buildQueryWrapper(${className}Bo bo) {
         LambdaQueryWrapper<${className}> lqw = Wrappers.lambdaQuery();
-${context.fieldMethods.filter((field) => field.search).map((field) => {
-    const method = field.type === 'string' ? 'like' : 'eq';
-    return `        lqw.${method}(bo.get${field.accessorName}() != null, ${className}::get${field.accessorName}, bo.get${field.accessorName}());`;
-  }).join('\n')}
+${context.fieldMethods.filter((field) => field.search).map((field) => queryCondition(field, className)).join('\n')}
         return lqw;
     }
 
@@ -555,7 +562,7 @@ ${fieldXmlConditions(context, 'bo')}
 </mapper>`;
 }
 
-function sqlTemplate() {
+function productPlanSqlTemplate() {
   return `create table if not exists biz_product_plan (
   id bigint not null comment '主键',
   plan_code varchar(128) not null comment '套餐编码',
@@ -582,45 +589,73 @@ insert into sys_menu values('19005', '产品套餐删除', '19001', '4', '#', ''
 insert into sys_menu values('19006', '产品套餐导出', '19001', '5', '#', '', '', 1, 0, 'F', '0', '0', 'business:productPlan:export', '#', 103, 1, sysdate(), null, null, '');`;
 }
 
-function generatedFileEntries(spec, backendRoot) {
+function genericSqlTemplate(spec, context) {
+  const fieldRows = context.fieldMethods.map((field) => {
+    const required = field.required ? 'not null' : 'default null';
+    const defaultClause = Object.hasOwn(field, 'default')
+      ? ` default ${field.type === 'integer' ? field.default : sqlString(field.default)}`
+      : '';
+    return `  ${field.columnName} ${field.sqlType} ${field.required ? `not null${defaultClause}` : `default null`} comment ${sqlString(field.title)},`;
+  });
+  const uniqueKeys = context.fieldMethods
+    .filter((field) => field.unique)
+    .map((field) => `  unique key uk_${spec.module.table}_${field.columnName} (${field.columnName})`);
+  const keyRows = ['  primary key (id)', ...uniqueKeys].join(',\n');
+
+  return `create table if not exists ${spec.module.table} (
+  id bigint not null comment '主键',
+${fieldRows.join('\n')}
+  create_dept bigint default null comment '创建部门',
+  create_by bigint default null comment '创建者',
+  create_time datetime default null comment '创建时间',
+  update_by bigint default null comment '更新者',
+  update_time datetime default null comment '更新时间',
+${keyRows}
+) engine=innodb comment=${sqlString(spec.module.title)};`;
+}
+
+function sqlTemplate(spec, context) {
+  if (spec.module.name === 'productPlan' && spec.module.table === 'biz_product_plan') {
+    return productPlanSqlTemplate();
+  }
+  return genericSqlTemplate(spec, context);
+}
+
+export function getBackendGeneratedFiles(spec, backendRoot) {
   const context = moduleContext(spec);
   const sourceRoot = `ruoyi-modules/${BUSINESS_ARTIFACT}/src/main/java/${context.packagePath}`;
   const resourceRoot = `ruoyi-modules/${BUSINESS_ARTIFACT}/src/main/resources/mapper/${context.resourceSegment}`;
-  return [
-    ['ruoyi-modules/pom.xml', null],
-    ['ruoyi-admin/pom.xml', null],
-    [`ruoyi-modules/${BUSINESS_ARTIFACT}/pom.xml`, createBusinessPom()],
-    [`${sourceRoot}/controller/${context.className}Controller.java`, controllerTemplate(spec, context)],
-    [`${sourceRoot}/domain/${context.className}.java`, domainTemplate(spec, context)],
-    [`${sourceRoot}/domain/bo/${context.className}Bo.java`, boTemplate(spec, context)],
-    [`${sourceRoot}/domain/vo/${context.className}Vo.java`, voTemplate(spec, context)],
-    [`${sourceRoot}/mapper/${context.className}Mapper.java`, mapperTemplate(spec, context)],
-    [`${sourceRoot}/service/I${context.className}Service.java`, serviceTemplate(spec, context)],
-    [`${sourceRoot}/service/impl/${context.className}ServiceImpl.java`, serviceImplTemplate(spec, context)],
-    [`${resourceRoot}/${context.className}Mapper.xml`, mapperXmlTemplate(spec, context)],
-    ['script/sql/ruoyi_business_product_plan.sql', sqlTemplate()],
-    ['script/sql/biz_product_plan.sql', sqlTemplate()],
-  ].map(([relativePath, content]) => ({
+  const entries = [
+    ['ruoyi-modules/pom.xml', null, true],
+    ['ruoyi-admin/pom.xml', null, true],
+    [`ruoyi-modules/${BUSINESS_ARTIFACT}/pom.xml`, createBusinessPom(), false],
+    [`${sourceRoot}/controller/${context.className}Controller.java`, controllerTemplate(spec, context), false],
+    [`${sourceRoot}/domain/${context.className}.java`, domainTemplate(spec, context), false],
+    [`${sourceRoot}/domain/bo/${context.className}Bo.java`, boTemplate(spec, context), false],
+    [`${sourceRoot}/domain/vo/${context.className}Vo.java`, voTemplate(spec, context), false],
+    [`${sourceRoot}/mapper/${context.className}Mapper.java`, mapperTemplate(spec, context), false],
+    [`${sourceRoot}/service/I${context.className}Service.java`, serviceTemplate(spec, context), false],
+    [`${sourceRoot}/service/impl/${context.className}ServiceImpl.java`, serviceImplTemplate(spec, context), false],
+    [`${resourceRoot}/${context.className}Mapper.xml`, mapperXmlTemplate(spec, context), false],
+    [`script/sql/${context.sqlFileName}`, sqlTemplate(spec, context), false],
+  ];
+
+  return entries.map(([relativePath, content, pom]) => ({
     relativePath,
-    filePath: absoluteTarget(backendRoot, relativePath),
+    filePath: path.resolve(backendRoot, relativePath),
     content,
-    pom: relativePath.endsWith('pom.xml') && content === null,
+    pom,
   }));
 }
 
-export function generateBackendModule(spec, backendRoot, options = {}) {
-  const entries = generatedFileEntries(spec, backendRoot);
-  const conflictFiles = entries
+export function findBackendConflicts(spec, backendRoot) {
+  return getBackendGeneratedFiles(spec, backendRoot)
     .filter((entry) => !entry.pom && fs.existsSync(entry.filePath))
     .map((entry) => entry.filePath);
+}
 
-  if (conflictFiles.length > 0 && options.force !== true) {
-    return {
-      ok: false,
-      code: 'generation_conflict',
-      files: conflictFiles,
-    };
-  }
+export function writeBackendModule(spec, backendRoot) {
+  const entries = getBackendGeneratedFiles(spec, backendRoot);
 
   for (const entry of entries) {
     if (entry.relativePath === 'ruoyi-modules/pom.xml') {
@@ -636,4 +671,18 @@ export function generateBackendModule(spec, backendRoot, options = {}) {
     ok: true,
     files: entries.map((entry) => entry.filePath),
   };
+}
+
+export function generateBackendModule(spec, backendRoot, options = {}) {
+  const conflictFiles = findBackendConflicts(spec, backendRoot);
+
+  if (conflictFiles.length > 0 && options.force !== true) {
+    return {
+      ok: false,
+      code: 'generation_conflict',
+      files: conflictFiles,
+    };
+  }
+
+  return writeBackendModule(spec, backendRoot);
 }

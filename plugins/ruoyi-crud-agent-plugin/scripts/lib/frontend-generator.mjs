@@ -5,20 +5,38 @@ function tsTypeBySpecType(type) {
   return type === 'integer' ? 'number' : 'string';
 }
 
-function absoluteTarget(root, relativePath) {
-  return path.resolve(root, relativePath);
-}
-
 function writeFile(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${content.trimEnd()}\n`);
+}
+
+function tsString(value) {
+  return JSON.stringify(String(value));
+}
+
+function tsLiteral(value) {
+  return typeof value === 'number' ? String(value) : tsString(value);
+}
+
+function htmlAttr(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function singleQuotedDirective(value) {
+  return `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
 }
 
 function moduleContext(spec) {
   return {
     className: spec.derived.className,
     variableName: spec.derived.variableName,
+    apiBase: spec.derived.apiBase,
     apiDir: spec.derived.frontendApiDir,
+    importApiDir: spec.derived.frontendApiDir.replace(/^src\//, ''),
     viewDir: spec.derived.frontendViewDir,
     fields: spec.fields,
     listFields: spec.fields.filter((field) => field.list),
@@ -42,49 +60,53 @@ ${formProperties}
 }
 
 export interface ${context.className}Query {
+  pageNum?: number;
+  pageSize?: number;
 ${queryProperties}
 }`;
 }
 
-function apiTemplate() {
+function apiTemplate(spec, context) {
+  const className = context.className;
+  const apiBase = context.apiBase;
   return `import request from '@/utils/request';
 import { AxiosPromise } from 'axios';
-import { ProductPlanVO, ProductPlanForm, ProductPlanQuery } from '@/api/business/product-plan/types';
+import { ${className}VO, ${className}Form, ${className}Query } from '@/${context.importApiDir}/types';
 
-export const listProductPlan = (query?: ProductPlanQuery): AxiosPromise<ProductPlanVO[]> => {
+export const list${className} = (query?: ${className}Query): AxiosPromise<${className}VO[]> => {
   return request({
-    url: '/business/productPlan/list',
+    url: ${tsString(`${apiBase}/list`)},
     method: 'get',
     params: query
   });
 };
 
-export const getProductPlan = (id: string | number): AxiosPromise<ProductPlanVO> => {
+export const get${className} = (id: string | number): AxiosPromise<${className}VO> => {
   return request({
-    url: '/business/productPlan/' + id,
+    url: ${tsString(`${apiBase}/`)} + id,
     method: 'get'
   });
 };
 
-export const addProductPlan = (data: ProductPlanForm) => {
+export const add${className} = (data: ${className}Form) => {
   return request({
-    url: '/business/productPlan',
+    url: ${tsString(apiBase)},
     method: 'post',
     data
   });
 };
 
-export const updateProductPlan = (data: ProductPlanForm) => {
+export const update${className} = (data: ${className}Form) => {
   return request({
-    url: '/business/productPlan',
+    url: ${tsString(apiBase)},
     method: 'put',
     data
   });
 };
 
-export const delProductPlan = (id: string | number | Array<string | number>) => {
+export const del${className} = (id: string | number | Array<string | number>) => {
   return request({
-    url: '/business/productPlan/' + id,
+    url: ${tsString(`${apiBase}/`)} + id,
     method: 'delete'
   });
 };`;
@@ -92,40 +114,37 @@ export const delProductPlan = (id: string | number | Array<string | number>) => 
 
 function defaultValue(field) {
   if (Object.hasOwn(field, 'default')) {
-    return typeof field.default === 'number' ? String(field.default) : `'${field.default}'`;
+    return tsLiteral(field.default);
   }
-  return field.type === 'integer' ? 'undefined' : "''";
-}
-
-function queryDefault(field) {
-  return field.type === 'integer' ? 'undefined' : "''";
+  return 'undefined';
 }
 
 function inputComponent(field, model) {
+  const title = htmlAttr(field.title);
   if (field.type === 'enum') {
-    const options = field.options.map((option) => `            <el-option label="${option}" value="${option}" />`).join('\n');
-    return `<el-select v-model="${model}.${field.name}" placeholder="请选择${field.title}" clearable>
+    const options = field.options.map((option) => `            <el-option label="${htmlAttr(option)}" value="${htmlAttr(option)}" />`).join('\n');
+    return `<el-select v-model="${model}.${field.name}" placeholder="请选择${title}" clearable>
 ${options}
           </el-select>`;
   }
   if (field.type === 'integer') {
     return `<el-input-number v-model="${model}.${field.name}" :min="${field.min ?? 0}" controls-position="right" />`;
   }
-  return `<el-input v-model="${model}.${field.name}" placeholder="请输入${field.title}" clearable />`;
+  return `<el-input v-model="${model}.${field.name}" placeholder="请输入${title}" clearable />`;
 }
 
 function searchItems(context) {
-  return context.searchFields.map((field) => `      <el-form-item label="${field.title}" prop="${field.name}">
+  return context.searchFields.map((field) => `      <el-form-item label="${htmlAttr(field.title)}" prop="${field.name}">
         ${inputComponent(field, 'queryParams').replaceAll('\n', '\n        ')}
       </el-form-item>`).join('\n');
 }
 
 function columns(context) {
-  return context.listFields.map((field) => `      <el-table-column label="${field.title}" align="center" prop="${field.name}" />`).join('\n');
+  return context.listFields.map((field) => `      <el-table-column label="${htmlAttr(field.title)}" align="center" prop="${field.name}" />`).join('\n');
 }
 
 function formItems(context) {
-  return context.formFields.map((field) => `        <el-form-item label="${field.title}" prop="${field.name}">
+  return context.formFields.map((field) => `        <el-form-item label="${htmlAttr(field.title)}" prop="${field.name}">
           ${inputComponent(field, 'form').replaceAll('\n', '\n          ')}
         </el-form-item>`).join('\n');
 }
@@ -135,18 +154,22 @@ function formDefaults(context) {
 }
 
 function queryDefaults(context) {
-  return context.searchFields.map((field) => `  ${field.name}: ${queryDefault(field)}`).join(',\n');
+  return context.searchFields.map((field) => `    ${field.name}: undefined`).join(',\n');
 }
 
 function validationRules(context) {
   return context.formFields
     .filter((field) => field.required)
-    .map((field) => `  ${field.name}: [{ required: true, message: '${field.title}不能为空', trigger: '${field.type === 'enum' ? 'change' : 'blur'}' }]`)
+    .map((field) => `    ${field.name}: [{ required: true, message: ${tsString(`${field.title}不能为空`)}, trigger: ${tsString(field.type === 'enum' ? 'change' : 'blur')} }]`)
     .join(',\n');
 }
 
 function vueTemplate(spec, context) {
   const className = context.className;
+  const addPerm = singleQuotedDirective(spec.permissions.create);
+  const editPerm = singleQuotedDirective(spec.permissions.update);
+  const deletePerm = singleQuotedDirective(spec.permissions.delete);
+  const exportPerm = singleQuotedDirective(spec.permissions.export);
   return `<template>
   <div class="p-2">
     <el-form ref="queryFormRef" :model="queryParams" :inline="true" label-width="80px">
@@ -159,16 +182,16 @@ ${searchItems(context)}
 
     <el-row :gutter="10" class="mb8">
       <el-col :span="1.5">
-        <el-button type="primary" plain icon="Plus" @click="handleAdd" v-hasPermi="['${spec.permissions.create}']">新增</el-button>
+        <el-button type="primary" plain icon="Plus" @click="handleAdd" v-hasPermi="[${addPerm}]">新增</el-button>
       </el-col>
       <el-col :span="1.5">
-        <el-button type="success" plain icon="Edit" :disabled="single" @click="handleUpdate()" v-hasPermi="['${spec.permissions.update}']">修改</el-button>
+        <el-button type="success" plain icon="Edit" :disabled="single" @click="handleUpdate()" v-hasPermi="[${editPerm}]">修改</el-button>
       </el-col>
       <el-col :span="1.5">
-        <el-button type="danger" plain icon="Delete" :disabled="multiple" @click="handleDelete()" v-hasPermi="['${spec.permissions.delete}']">删除</el-button>
+        <el-button type="danger" plain icon="Delete" :disabled="multiple" @click="handleDelete()" v-hasPermi="[${deletePerm}]">删除</el-button>
       </el-col>
       <el-col :span="1.5">
-        <el-button type="warning" plain icon="Download" @click="handleExport" v-hasPermi="['${spec.permissions.export}']">导出</el-button>
+        <el-button type="warning" plain icon="Download" @click="handleExport" v-hasPermi="[${exportPerm}]">导出</el-button>
       </el-col>
     </el-row>
 
@@ -179,10 +202,10 @@ ${columns(context)}
       <el-table-column label="操作" align="center" class-name="small-padding fixed-width">
         <template #default="scope">
           <el-tooltip content="修改" placement="top">
-            <el-button link type="primary" icon="Edit" @click="handleUpdate(scope.row)" v-hasPermi="['${spec.permissions.update}']" />
+            <el-button link type="primary" icon="Edit" @click="handleUpdate(scope.row)" v-hasPermi="[${editPerm}]" />
           </el-tooltip>
           <el-tooltip content="删除" placement="top">
-            <el-button link type="primary" icon="Delete" @click="handleDelete(scope.row)" v-hasPermi="['${spec.permissions.delete}']" />
+            <el-button link type="primary" icon="Delete" @click="handleDelete(scope.row)" v-hasPermi="[${deletePerm}]" />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -205,8 +228,8 @@ ${formItems(context)}
 </template>
 
 <script setup lang="ts">
-import { list${className}, get${className}, del${className}, add${className}, update${className} } from '@/api/business/product-plan';
-import { ${className}VO, ${className}Form, ${className}Query } from '@/api/business/product-plan/types';
+import { list${className}, get${className}, del${className}, add${className}, update${className} } from '@/${context.importApiDir}';
+import { ${className}VO, ${className}Form, ${className}Query } from '@/${context.importApiDir}/types';
 
 const { proxy } = getCurrentInstance() as ComponentInternalInstance;
 
@@ -231,7 +254,7 @@ const data = reactive({
   form: { ...initFormData } as ${className}Form,
   queryParams: {
     pageNum: 1,
-    pageSize: 10,
+    pageSize: 10${context.searchFields.length > 0 ? ',\n' : ''}
 ${queryDefaults(context)}
   } as ${className}Query,
   rules: {
@@ -278,7 +301,7 @@ const handleSelectionChange = (selection: ${className}VO[]) => {
 const handleAdd = () => {
   reset();
   open.value = true;
-  title.value = '添加${spec.module.title}';
+  title.value = ${tsString(`添加${spec.module.title}`)};
 };
 
 const handleUpdate = async (row?: ${className}VO) => {
@@ -287,7 +310,7 @@ const handleUpdate = async (row?: ${className}VO) => {
   const res = await get${className}(id);
   form.value = res.data;
   open.value = true;
-  title.value = '修改${spec.module.title}';
+  title.value = ${tsString(`修改${spec.module.title}`)};
 };
 
 const submitForm = () => {
@@ -308,14 +331,14 @@ const submitForm = () => {
 
 const handleDelete = async (row?: ${className}VO) => {
   const deleteIds = row?.id || ids.value;
-  await proxy?.$modal.confirm('是否确认删除${spec.module.title}编号为"' + deleteIds + '"的数据项？');
+  await proxy?.$modal.confirm(${tsString(`是否确认删除${spec.module.title}编号为"`)} + deleteIds + ${tsString('"的数据项？')});
   await del${className}(deleteIds);
   await getList();
   proxy?.$modal.msgSuccess('删除成功');
 };
 
 const handleExport = () => {
-  proxy?.download('/business/productPlan/export', {
+  proxy?.download(${tsString(`${context.apiBase}/export`)}, {
     ...queryParams.value
   }, \`${context.variableName}_\${new Date().getTime()}.xlsx\`);
 };
@@ -326,24 +349,39 @@ onMounted(() => {
 </script>`;
 }
 
-function generatedFileEntries(spec, frontendRoot) {
+export function getFrontendGeneratedFiles(spec, frontendRoot) {
   const context = moduleContext(spec);
   return [
     [`${context.apiDir}/types.ts`, typesTemplate(spec, context)],
-    [`${context.apiDir}/index.ts`, apiTemplate()],
+    [`${context.apiDir}/index.ts`, apiTemplate(spec, context)],
     [`${context.viewDir}/index.vue`, vueTemplate(spec, context)],
   ].map(([relativePath, content]) => ({
     relativePath,
-    filePath: absoluteTarget(frontendRoot, relativePath),
+    filePath: path.resolve(frontendRoot, relativePath),
     content,
+    pom: false,
   }));
 }
 
-export function generateFrontendModule(spec, frontendRoot, options = {}) {
-  const entries = generatedFileEntries(spec, frontendRoot);
-  const conflictFiles = entries
+export function findFrontendConflicts(spec, frontendRoot) {
+  return getFrontendGeneratedFiles(spec, frontendRoot)
     .filter((entry) => fs.existsSync(entry.filePath))
     .map((entry) => entry.filePath);
+}
+
+export function writeFrontendModule(spec, frontendRoot) {
+  const entries = getFrontendGeneratedFiles(spec, frontendRoot);
+  for (const entry of entries) {
+    writeFile(entry.filePath, entry.content);
+  }
+  return {
+    ok: true,
+    files: entries.map((entry) => entry.filePath),
+  };
+}
+
+export function generateFrontendModule(spec, frontendRoot, options = {}) {
+  const conflictFiles = findFrontendConflicts(spec, frontendRoot);
 
   if (conflictFiles.length > 0 && options.force !== true) {
     return {
@@ -353,12 +391,5 @@ export function generateFrontendModule(spec, frontendRoot, options = {}) {
     };
   }
 
-  for (const entry of entries) {
-    writeFile(entry.filePath, entry.content);
-  }
-
-  return {
-    ok: true,
-    files: entries.map((entry) => entry.filePath),
-  };
+  return writeFrontendModule(spec, frontendRoot);
 }
