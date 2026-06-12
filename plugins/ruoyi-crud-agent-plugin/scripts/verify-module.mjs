@@ -46,11 +46,11 @@ function commandResult(command, args, options = {}, runner = runCommand) {
   };
 }
 
-function skippedCommand(commandLine, reason) {
+function skippedCommand(commandLine, reason, ok = false) {
   return {
     commandLine,
     status: null,
-    ok: false,
+    ok,
     skipped: true,
     reason,
     stdout: '',
@@ -313,15 +313,24 @@ export function verifyModule(specPath, options = {}) {
   const backendCompile = shouldBuild
     ? commandResult('mvn', ['-pl', 'ruoyi-admin', '-am', '-DskipTests', 'compile'], { cwd: backendRoot }, runner)
     : skippedCommand('mvn -pl ruoyi-admin -am -DskipTests compile', buildSkipReason);
-  const frontendBuild = shouldBuild
+  const viteBinPath = path.join(frontendRoot, 'node_modules/.bin/vite');
+  const frontendInstall = shouldBuild && !fs.existsSync(viteBinPath)
+    ? commandResult('pnpm', ['install'], { cwd: frontendRoot }, runner)
+    : skippedCommand(
+      'pnpm install',
+      shouldBuild ? 'vite already installed' : buildSkipReason,
+      shouldBuild,
+    );
+  const frontendBuild = shouldBuild && frontendInstall.ok
     ? commandResult('pnpm', ['build:prod'], { cwd: frontendRoot }, runner)
-    : skippedCommand('pnpm build:prod', buildSkipReason);
+    : skippedCommand('pnpm build:prod', shouldBuild ? 'frontend install failed' : buildSkipReason);
 
   return {
-    ok: staticResult.ok && environment.ok && backendCompile.ok && frontendBuild.ok,
+    ok: staticResult.ok && environment.ok && backendCompile.ok && frontendInstall.ok && frontendBuild.ok,
     static: staticResult,
     environment,
     backendCompile,
+    frontendInstall,
     frontendBuild,
   };
 }

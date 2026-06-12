@@ -206,6 +206,8 @@ test('verifyModule skips compile and build when static checks fail', () => {
   assert.equal(result.environment.ok, true);
   assert.equal(result.backendCompile.skipped, true);
   assert.equal(result.backendCompile.reason, 'static checks failed');
+  assert.equal(result.frontendInstall.skipped, true);
+  assert.equal(result.frontendInstall.reason, 'static checks failed');
   assert.equal(result.frontendBuild.skipped, true);
   assert.equal(result.frontendBuild.reason, 'static checks failed');
   assert.deepEqual(calls.map((call) => [call.command, call.args.join(' ')]), [
@@ -213,6 +215,107 @@ test('verifyModule skips compile and build when static checks fail', () => {
     ['mvn', '-version'],
     ['node', '--version'],
     ['pnpm', '--version'],
+  ]);
+});
+
+test('verifyModule installs frontend dependencies before build when vite is missing', () => {
+  const root = tempRoot();
+  const { backendRoot, frontendRoot } = generateExample(root);
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      command,
+      cwd: options.cwd,
+      status: 0,
+      stdout: '',
+      stderr: '',
+    };
+  };
+
+  const result = verifyModule(examplePath, { backendRoot, frontendRoot, runCommand: runner });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.frontendInstall.ok, true);
+  assert.equal(result.frontendInstall.commandLine, 'pnpm install');
+  assert.equal(result.frontendBuild.ok, true);
+  assert.deepEqual(calls.map((call) => [call.command, call.args.join(' ')]), [
+    ['java', '-version'],
+    ['mvn', '-version'],
+    ['node', '--version'],
+    ['pnpm', '--version'],
+    ['mvn', '-pl ruoyi-admin -am -DskipTests compile'],
+    ['pnpm', 'install'],
+    ['pnpm', 'build:prod'],
+  ]);
+  assert.equal(calls.at(-2).options.cwd, frontendRoot);
+  assert.equal(calls.at(-1).options.cwd, frontendRoot);
+});
+
+test('verifyModule skips frontend build when dependency install fails', () => {
+  const root = tempRoot();
+  const { backendRoot, frontendRoot } = generateExample(root);
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      command,
+      cwd: options.cwd,
+      status: command === 'pnpm' && args[0] === 'install' ? 1 : 0,
+      stdout: '',
+      stderr: command === 'pnpm' && args[0] === 'install' ? 'install failed' : '',
+    };
+  };
+
+  const result = verifyModule(examplePath, { backendRoot, frontendRoot, runCommand: runner });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.frontendInstall.ok, false);
+  assert.equal(result.frontendInstall.commandLine, 'pnpm install');
+  assert.equal(result.frontendBuild.skipped, true);
+  assert.equal(result.frontendBuild.reason, 'frontend install failed');
+  assert.deepEqual(calls.map((call) => [call.command, call.args.join(' ')]), [
+    ['java', '-version'],
+    ['mvn', '-version'],
+    ['node', '--version'],
+    ['pnpm', '--version'],
+    ['mvn', '-pl ruoyi-admin -am -DskipTests compile'],
+    ['pnpm', 'install'],
+  ]);
+});
+
+test('verifyModule does not install frontend dependencies when vite exists', () => {
+  const root = tempRoot();
+  const { backendRoot, frontendRoot } = generateExample(root);
+  const vitePath = path.join(frontendRoot, 'node_modules/.bin/vite');
+  fs.mkdirSync(path.dirname(vitePath), { recursive: true });
+  fs.writeFileSync(vitePath, '');
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      command,
+      cwd: options.cwd,
+      status: 0,
+      stdout: '',
+      stderr: '',
+    };
+  };
+
+  const result = verifyModule(examplePath, { backendRoot, frontendRoot, runCommand: runner });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.frontendInstall.ok, true);
+  assert.equal(result.frontendInstall.skipped, true);
+  assert.equal(result.frontendInstall.reason, 'vite already installed');
+  assert.equal(result.frontendBuild.ok, true);
+  assert.deepEqual(calls.map((call) => [call.command, call.args.join(' ')]), [
+    ['java', '-version'],
+    ['mvn', '-version'],
+    ['node', '--version'],
+    ['pnpm', '--version'],
+    ['mvn', '-pl ruoyi-admin -am -DskipTests compile'],
+    ['pnpm', 'build:prod'],
   ]);
 });
 

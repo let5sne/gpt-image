@@ -38,6 +38,12 @@ function countMatches(value, pattern) {
   return value.match(pattern)?.length || 0;
 }
 
+function businessDependencyBlock(content) {
+  const match = content.match(/<dependency>[\s\S]*?<artifactId>ruoyi-business<\/artifactId>[\s\S]*?<\/dependency>/);
+  assert.ok(match);
+  return match[0];
+}
+
 test('generator writes product plan backend and frontend files', () => {
   const root = tempRoot();
   const backendRoot = path.join(root, 'backend');
@@ -273,6 +279,70 @@ test('generateModule conflict preflight writes nothing across backend and fronte
   assert.equal(fs.existsSync(path.join(backendRoot, 'ruoyi-modules/pom.xml')), false);
   assert.equal(fs.existsSync(path.join(backendRoot, 'ruoyi-modules/ruoyi-business/src/main/java/org/dromara/business/product/controller/ProductPlanController.java')), false);
   assert.equal(fs.readFileSync(frontendConflict, 'utf8'), 'existing');
+});
+
+test('existing ruoyi-admin POM injection uses revision version and stays idempotent', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const adminPomPath = path.join(backendRoot, 'ruoyi-admin/pom.xml');
+  fs.mkdirSync(path.dirname(adminPomPath), { recursive: true });
+  fs.writeFileSync(adminPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-vue-plus</artifactId>
+    <version>\${revision}</version>
+  </parent>
+  <artifactId>ruoyi-admin</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-system</artifactId>
+    </dependency>
+  </dependencies>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const adminPom = fs.readFileSync(adminPomPath, 'utf8');
+  const dependency = businessDependencyBlock(adminPom);
+  assert.equal(countMatches(adminPom, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
+  assert.ok(dependency.includes('<version>${revision}</version>'));
+});
+
+test('existing versionless ruoyi-admin business dependency is repaired idempotently', () => {
+  const root = tempRoot();
+  const backendRoot = path.join(root, 'backend');
+  const adminPomPath = path.join(backendRoot, 'ruoyi-admin/pom.xml');
+  fs.mkdirSync(path.dirname(adminPomPath), { recursive: true });
+  fs.writeFileSync(adminPomPath, `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.dromara</groupId>
+    <artifactId>ruoyi-vue-plus</artifactId>
+    <version>\${revision}</version>
+  </parent>
+  <artifactId>ruoyi-admin</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.dromara</groupId>
+      <artifactId>ruoyi-business</artifactId>
+    </dependency>
+  </dependencies>
+</project>`);
+
+  const spec = loadExampleSpec();
+  assert.equal(generateBackendModule(spec, backendRoot).ok, true);
+  assert.equal(generateBackendModule(spec, backendRoot, { force: true }).ok, true);
+
+  const adminPom = fs.readFileSync(adminPomPath, 'utf8');
+  const dependency = businessDependencyBlock(adminPom);
+  assert.equal(countMatches(adminPom, /<artifactId>ruoyi-business<\/artifactId>/g), 1);
+  assert.equal(countMatches(dependency, /<version>\$\{revision\}<\/version>/g), 1);
 });
 
 test('force overwrites generated files and POM updates stay idempotent', () => {

@@ -51,10 +51,6 @@ export function inspectExistingCheckout(name, source, target) {
 }
 
 export function clonePinned(name, source, target, options = {}) {
-  if (fs.existsSync(target)) {
-    return inspectExistingCheckout(name, source, target);
-  }
-
   if (options.dryRun) {
     return {
       ok: true,
@@ -65,6 +61,10 @@ export function clonePinned(name, source, target, options = {}) {
       tag: source.tag,
       ref: source.ref,
     };
+  }
+
+  if (fs.existsSync(target)) {
+    return inspectExistingCheckout(name, source, target);
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });

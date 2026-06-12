@@ -170,22 +170,44 @@ function injectModulePom(content) {
   return content.replace('</project>', '  <modules>\n    <module>ruoyi-business</module>\n  </modules>\n</project>');
 }
 
-function adminDependencyXml(includeVersion = false) {
-  const versionLine = includeVersion ? '      <version>1.0.0</version>\n' : '';
+function adminDependencyVersion(content) {
+  if (content.includes('${revision}')) {
+    return '${revision}';
+  }
+
+  const versionMatch = content.match(/<version>\s*([^<]+?)\s*<\/version>/);
+  return versionMatch ? versionMatch[1].trim() : '1.0.0';
+}
+
+function adminDependencyXml(version = '1.0.0') {
   return `    <dependency>
       <groupId>org.dromara</groupId>
       <artifactId>ruoyi-business</artifactId>
-${versionLine}    </dependency>`;
+      <version>${version}</version>
+    </dependency>`;
+}
+
+function ensureAdminDependencyVersion(content, version) {
+  return content.replace(
+    /<dependency>[\s\S]*?<artifactId>ruoyi-business<\/artifactId>[\s\S]*?<\/dependency>/g,
+    (dependency) => {
+      if (dependency.includes('<version>')) {
+        return dependency;
+      }
+      return dependency.replace('</dependency>', `      <version>${version}</version>\n    </dependency>`);
+    },
+  );
 }
 
 function injectAdminPom(content) {
+  const version = adminDependencyVersion(content);
   if (content.includes('<artifactId>ruoyi-business</artifactId>')) {
-    return content;
+    return ensureAdminDependencyVersion(content, version);
   }
   if (content.includes('</dependencies>')) {
-    return content.replace('</dependencies>', `${adminDependencyXml()}\n  </dependencies>`);
+    return content.replace('</dependencies>', `${adminDependencyXml(version)}\n  </dependencies>`);
   }
-  return content.replace('</project>', `  <dependencies>\n${adminDependencyXml()}\n  </dependencies>\n</project>`);
+  return content.replace('</project>', `  <dependencies>\n${adminDependencyXml(version)}\n  </dependencies>\n</project>`);
 }
 
 function upsertModulesPom(filePath) {
