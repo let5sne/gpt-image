@@ -36,8 +36,8 @@ function parseArgs(args) {
   };
 }
 
-function commandResult(command, args, options = {}) {
-  const result = runCommand(command, args, options);
+function commandResult(command, args, options = {}, runner = runCommand) {
+  const result = runner(command, args, options);
   return {
     ...result,
     args,
@@ -73,22 +73,79 @@ function staticCheck(ok, code, filePath, message) {
   return { ok, code, filePath, message };
 }
 
-function relativeGeneratedFiles(spec, backendRoot, frontendRoot) {
+function generatedFileEntries(spec, backendRoot, frontendRoot) {
   return [
     ...getBackendGeneratedFiles(spec, backendRoot),
     ...getFrontendGeneratedFiles(spec, frontendRoot),
-  ].map((entry) => entry.relativePath);
+  ];
+}
+
+function relativeGeneratedFiles(spec, backendRoot, frontendRoot) {
+  return generatedFileEntries(spec, backendRoot, frontendRoot).map((entry) => entry.relativePath);
+}
+
+function byRelativePath(entries) {
+  return new Map(entries.map((entry) => [entry.relativePath, entry]));
 }
 
 function requiredGeneratedFiles(spec, backendRoot, frontendRoot) {
+  const entries = byRelativePath(generatedFileEntries(spec, backendRoot, frontendRoot));
   const backendFiles = getBackendGeneratedFiles(spec, backendRoot);
-  const frontendFiles = getFrontendGeneratedFiles(spec, frontendRoot);
   return {
     controller: backendFiles.find((entry) => entry.relativePath.endsWith(`/${spec.derived.className}Controller.java`)),
     sql: backendFiles.find((entry) => entry.relativePath.startsWith('script/sql/') && entry.relativePath.endsWith('.sql')),
-    frontendApi: frontendFiles.find((entry) => entry.relativePath === `${spec.derived.frontendApiDir}/index.ts`),
-    frontendView: frontendFiles.find((entry) => entry.relativePath === `${spec.derived.frontendViewDir}/index.vue`),
+    frontendApi: entries.get(`${spec.derived.frontendApiDir}/index.ts`),
+    frontendView: entries.get(`${spec.derived.frontendViewDir}/index.vue`),
   };
+}
+
+function dialogFormSection(content, variableName) {
+  if (typeof content !== 'string') {
+    return '';
+  }
+
+  const formStart = content.indexOf(`<el-form ref="${variableName}FormRef"`);
+  if (formStart === -1) {
+    return '';
+  }
+
+  const formEnd = content.indexOf('</el-form>', formStart);
+  if (formEnd === -1) {
+    return content.slice(formStart);
+  }
+
+  return content.slice(formStart, formEnd);
+}
+
+function controllerCrudChecks(spec, controllerContent, controllerPath) {
+  return [
+    ['smokeCrudStatic_controller_list', '@GetMapping("/list")'],
+    ['smokeCrudStatic_controller_get', '@GetMapping("/{id}")'],
+    ['smokeCrudStatic_controller_add', '@PostMapping()'],
+    ['smokeCrudStatic_controller_edit', '@PutMapping()'],
+    ['smokeCrudStatic_controller_remove', '@DeleteMapping("/{ids}")'],
+  ].map(([code, marker]) => staticCheck(
+    includesMarker(controllerContent, marker),
+    code,
+    controllerPath,
+    `controller CRUD surface includes ${marker}`,
+  ));
+}
+
+function frontendCrudChecks(spec, apiContent, apiPath) {
+  const className = spec.derived.className;
+  return [
+    ['smokeCrudStatic_frontend_list', `export const list${className}`],
+    ['smokeCrudStatic_frontend_get', `export const get${className}`],
+    ['smokeCrudStatic_frontend_add', `export const add${className}`],
+    ['smokeCrudStatic_frontend_update', `export const update${className}`],
+    ['smokeCrudStatic_frontend_delete', `export const del${className}`],
+  ].map(([code, marker]) => staticCheck(
+    includesMarker(apiContent, marker),
+    code,
+    apiPath,
+    `frontend CRUD API includes ${marker}`,
+  ));
 }
 
 export function verifyGeneratedFiles({ backendRoot, frontendRoot, spec, expectedFields } = {}) {
@@ -100,17 +157,14 @@ export function verifyGeneratedFiles({ backendRoot, frontendRoot, spec, expected
     backendRoot: backendRoot || path.join(sandboxRoot, 'backend'),
     frontendRoot: frontendRoot || path.join(sandboxRoot, 'frontend'),
   };
+  const generatedEntries = generatedFileEntries(spec, roots.backendRoot, roots.frontendRoot);
   const required = requiredGeneratedFiles(spec, roots.backendRoot, roots.frontendRoot);
   const checks = [];
 
-  for (const [name, entry] of Object.entries(required)) {
-    if (!entry) {
-      checks.push(staticCheck(false, 'missing_expected_path', undefined, `could not derive ${name} path`));
-      continue;
-    }
+  for (const entry of generatedEntries) {
     checks.push(staticCheck(
       fs.existsSync(entry.filePath),
-      `${name}_exists`,
+      'generated_file_exists',
       entry.filePath,
       `${entry.relativePath} exists`,
     ));
@@ -120,14 +174,15 @@ export function verifyGeneratedFiles({ backendRoot, frontendRoot, spec, expected
   const apiContent = readFileIfPresent(required.frontendApi?.filePath);
   const pageContent = readFileIfPresent(required.frontendView?.filePath);
   const sqlContent = readFileIfPresent(required.sql?.filePath);
+  const formContent = dialogFormSection(pageContent, spec.derived.variableName);
   const formFields = expectedFields || spec.acceptance?.frontend?.formFields || [];
 
   for (const fieldName of formFields) {
     checks.push(staticCheck(
-      includesMarker(pageContent, `prop="${fieldName}"`),
-      'form_field_marker',
+      includesMarker(formContent, `prop="${fieldName}"`),
+      'dialog_form_field_marker',
       required.frontendView?.filePath,
-      `page includes prop="${fieldName}"`,
+      `dialog form includes prop="${fieldName}"`,
     ));
   }
 
@@ -171,6 +226,38 @@ export function verifyGeneratedFiles({ backendRoot, frontendRoot, spec, expected
     `SQL includes ${spec.permissions.list}`,
   ));
 
+  if (spec.acceptance?.frontend?.routeVisible === true) {
+    checks.push(staticCheck(
+      includesMarker(sqlContent, 'insert into sys_menu') && includesMarker(sqlContent, `${spec.module.menuPath}/index`),
+      'routeVisible_sql_component_path',
+      required.sql?.filePath,
+      `SQL menu includes component path ${spec.module.menuPath}/index`,
+    ));
+    checks.push(staticCheck(
+      includesMarker(sqlContent, spec.permissions.list),
+      'routeVisible_sql_list_permission',
+      required.sql?.filePath,
+      `SQL menu includes list permission ${spec.permissions.list}`,
+    ));
+    checks.push(staticCheck(
+      fs.existsSync(required.frontendApi?.filePath || ''),
+      'routeVisible_frontend_api_exists',
+      required.frontendApi?.filePath,
+      'frontend API file exists for route',
+    ));
+    checks.push(staticCheck(
+      fs.existsSync(required.frontendView?.filePath || ''),
+      'routeVisible_frontend_view_exists',
+      required.frontendView?.filePath,
+      'frontend view file exists for route',
+    ));
+  }
+
+  if (spec.acceptance?.backend?.smokeCrud === true) {
+    checks.push(...controllerCrudChecks(spec, controllerContent, required.controller?.filePath));
+    checks.push(...frontendCrudChecks(spec, apiContent, required.frontendApi?.filePath));
+  }
+
   const ok = checks.every((check) => check.ok);
 
   return {
@@ -178,18 +265,19 @@ export function verifyGeneratedFiles({ backendRoot, frontendRoot, spec, expected
     roots,
     checks,
     missingFiles: checks
-      .filter((check) => !check.ok && check.code.endsWith('_exists'))
+      .filter((check) => !check.ok && check.code === 'generated_file_exists')
       .map((check) => check.filePath),
-    generatedFiles: relativeGeneratedFiles(spec, roots.backendRoot, roots.frontendRoot),
+    generatedFiles: generatedEntries.map((entry) => entry.relativePath),
   };
 }
 
-export function verifyEnvironment() {
+export function verifyEnvironment(options = {}) {
+  const runner = options.runCommand || runCommand;
   const commands = [
-    commandResult('java', ['-version']),
-    commandResult('mvn', ['-version']),
-    commandResult('node', ['--version']),
-    commandResult('pnpm', ['--version']),
+    commandResult('java', ['-version'], {}, runner),
+    commandResult('mvn', ['-version'], {}, runner),
+    commandResult('node', ['--version'], {}, runner),
+    commandResult('pnpm', ['--version'], {}, runner),
   ];
 
   return {
@@ -216,13 +304,18 @@ export function verifyModule(specPath, options = {}) {
     frontendRoot,
     spec: result.spec,
   });
-  const environment = verifyEnvironment();
-  const backendCompile = environment.ok
-    ? commandResult('mvn', ['-pl', 'ruoyi-admin', '-am', '-DskipTests', 'compile'], { cwd: backendRoot })
-    : skippedCommand('mvn -pl ruoyi-admin -am -DskipTests compile', 'environment checks failed');
-  const frontendBuild = environment.ok
-    ? commandResult('pnpm', ['build:prod'], { cwd: frontendRoot })
-    : skippedCommand('pnpm build:prod', 'environment checks failed');
+  const runner = options.runCommand || runCommand;
+  const environment = verifyEnvironment({ runCommand: runner });
+  const buildSkipReason = !environment.ok
+    ? 'environment checks failed'
+    : 'static checks failed';
+  const shouldBuild = environment.ok && staticResult.ok;
+  const backendCompile = shouldBuild
+    ? commandResult('mvn', ['-pl', 'ruoyi-admin', '-am', '-DskipTests', 'compile'], { cwd: backendRoot }, runner)
+    : skippedCommand('mvn -pl ruoyi-admin -am -DskipTests compile', buildSkipReason);
+  const frontendBuild = shouldBuild
+    ? commandResult('pnpm', ['build:prod'], { cwd: frontendRoot }, runner)
+    : skippedCommand('pnpm build:prod', buildSkipReason);
 
   return {
     ok: staticResult.ok && environment.ok && backendCompile.ok && frontendBuild.ok,
