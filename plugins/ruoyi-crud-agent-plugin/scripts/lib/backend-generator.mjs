@@ -599,10 +599,13 @@ insert into sys_menu values('19006', '产品套餐导出', '19001', '5', '#', ''
 
 function genericSqlTemplate(spec, context) {
   const fieldRows = context.fieldMethods.map((field) => {
-    const defaultClause = Object.hasOwn(field, 'default')
-      ? ` default ${field.type === 'integer' ? field.default : sqlString(field.default)}`
+    const defaultValueClause = Object.hasOwn(field, 'default')
+      ? `default ${field.type === 'integer' ? field.default : sqlString(field.default)}`
       : '';
-    return `  ${field.columnName} ${field.sqlType} ${field.required ? `not null${defaultClause}` : `default null`} comment ${sqlString(field.title)},`;
+    const fieldConstraint = field.required
+      ? ['not null', defaultValueClause].filter(Boolean).join(' ')
+      : defaultValueClause || 'default null';
+    return `  ${field.columnName} ${field.sqlType} ${fieldConstraint} comment ${sqlString(field.title)},`;
   });
   const uniqueKeys = context.fieldMethods
     .filter((field) => field.unique)

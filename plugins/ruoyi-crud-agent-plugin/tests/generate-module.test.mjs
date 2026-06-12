@@ -139,6 +139,12 @@ fields:
     list: true
     form: true
     search: true
+  - name: sortOrder
+    title: 排序
+    type: integer
+    default: 0
+    list: true
+    form: true
 permissions:
   menu: business:customerPlan
   list: business:customerPlan:list
@@ -153,7 +159,7 @@ acceptance:
   frontend:
     build: true
     routeVisible: true
-    formFields: [customerCode, status]
+    formFields: [customerCode, status, sortOrder]
   report:
     format: [markdown, json]
 `);
@@ -179,6 +185,7 @@ acceptance:
   const sql = fs.readFileSync(backend.files.find((file) => file.endsWith('ruoyi_business_customer_plan.sql')), 'utf8');
   assert.ok(sql.includes('create table if not exists biz_customer_plan'));
   assert.ok(sql.includes('customer_code varchar(128) not null'));
+  assert.ok(sql.includes("sort_order int default 0 comment '排序'"));
   assert.ok(sql.includes('insert into sys_menu values'));
   assert.ok(sql.includes("'客户套餐'"));
   assert.ok(sql.includes("'business/customer-plan/index'"));
